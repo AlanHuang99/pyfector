@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyfect"
+version = "0.1.0"
+description = "Fast counterfactual estimators for panel data — Python reimplementation of R fect"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Alan" },
+]
+keywords = [
+    "causal-inference",
+    "panel-data",
+    "treatment-effects",
+    "counterfactual",
+    "fixed-effects",
+    "matrix-completion",
+    "interactive-fixed-effects",
+    "difference-in-differences",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "polars>=0.20",
+    "joblib>=1.3",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+gpu = ["cupy-cuda12x>=13.0"]
+pandas = ["pandas>=2.0"]
+dev = [
+    "pytest>=7.0",
+    "pytest-xdist",
+    "rpy2>=3.5",
+    "pandas>=2.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pyfect"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
