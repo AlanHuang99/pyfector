@@ -46,6 +46,9 @@ pandas = ["pandas>=2.0"]
 dev = [
     "pytest>=7.0",
     "pytest-xdist",
+    "pandas>=2.0",
+]
+r-comparison = [
     "rpy2>=3.5",
     "pandas>=2.0",
 ]
