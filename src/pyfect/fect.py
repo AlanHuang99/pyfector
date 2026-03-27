@@ -427,15 +427,21 @@ def _run_inference(
     """Run bootstrap or jackknife inference."""
     xp = get_backend()
 
+    # Pre-move panel data to device once (avoids CPU→GPU copy per bootstrap rep)
+    II_dev = to_device(panel.II)
+    D_dev = to_device(panel.D)
+    I_dev = to_device(panel.I)
+    T_on_np = panel.T_on  # keep on CPU for ATT computation
+
     def _estimate_fn(unit_idx):
         """Re-estimate on a subset of units."""
         Y_sub = Y_mat[:, unit_idx]
-        II_sub = to_device(panel.II[:, unit_idx])
-        D_sub = to_device(panel.D[:, unit_idx])
-        I_sub = to_device(panel.I[:, unit_idx])
+        II_sub = II_dev[:, unit_idx]
+        D_sub = D_dev[:, unit_idx]
+        I_sub = I_dev[:, unit_idx]
         X_sub = X_mat[:, unit_idx, :] if X_mat is not None else None
         W_sub = W_mat[:, unit_idx] if W_mat is not None else None
-        T_on_sub = panel.T_on[:, unit_idx]
+        T_on_sub = T_on_np[:, unit_idx]
         beta0_sub = beta0
 
         # Re-compute initial fit for this subset
