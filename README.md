@@ -1,5 +1,7 @@
 # pyfect
 
+> **Alpha release** -- this package is under active development. APIs may change. Bug reports and feature requests are welcome via [GitHub Issues](https://github.com/AlanHuang99/pyfect/issues).
+
 Fast counterfactual estimators for panel data in Python.
 
 A high-performance reimplementation of the R [fect](https://github.com/xuyiqing/fect) package (Liu, Wang & Xu, 2024, *AJPS*), featuring GPU acceleration, parallel computing, and Polars data handling.
@@ -83,8 +85,8 @@ pyfect.fect(
     vartype: str = "bootstrap",     # "bootstrap" or "jackknife"
     nboots: int = 200,              # bootstrap replications
     alpha: float = 0.05,            # significance level
-    tol: float = 1e-5,              # convergence tolerance
-    max_iter: int = 1000,           # max EM iterations
+    tol: float = 1e-7,              # convergence tolerance
+    max_iter: int = 5000,           # max EM iterations
     min_T0: int = 1,               # min pre-treatment periods per unit
     normalize: bool = False,        # normalize outcome by SD
     device: str = "cpu",            # "cpu" or "gpu"

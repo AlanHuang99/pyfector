@@ -317,12 +317,13 @@ for row_idx, (scenario, slab) in enumerate([("full", "Balanced"), ("drop", "5% D
             ax.text(0.5, 0.5, "N/A", ha="center", va="center")
             continue
         time_on = res.time_on; att_on = res.att_on
-        ci = res.inference.att_on_ci if res.inference and res.inference.att_on_ci is not None else None
+        ci_lo = res.inference.att_on_ci_lower if res.inference else None
+        ci_hi = res.inference.att_on_ci_upper if res.inference else None
         ax.axhline(0, color="gray", ls="--", lw=0.8)
         ax.axhline(1.5, color="red", ls=":", lw=1, alpha=0.6, label="True ATT=1.5")
         ax.axvline(-0.5, color="gray", ls=":", lw=0.8, alpha=0.5)
-        if ci is not None:
-            ax.fill_between(time_on, ci[:, 0], ci[:, 1], alpha=0.15, color="steelblue")
+        if ci_lo is not None:
+            ax.fill_between(time_on, ci_lo, ci_hi, alpha=0.15, color="steelblue")
         ax.plot(time_on, att_on, color="steelblue", lw=1.5)
         if row_idx == 0: ax.set_title(f"{method_labels[mname]}", fontsize=14, fontweight="bold")
         if col_idx == 0: ax.set_ylabel(slab, fontsize=12, fontweight="bold")
