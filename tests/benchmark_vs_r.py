@@ -1,5 +1,5 @@
 """
-Detailed head-to-head comparison: pyfect vs R fect.
+Detailed head-to-head comparison: pyfector vs R fect.
 
 Runs identical data through both packages and prints a comparison table
 with exact numbers for ATT, SE, CI, dynamic effects, and timing.
@@ -17,7 +17,7 @@ import time
 import numpy as np
 import polars as pl
 
-import pyfect
+import pyfector
 from tests.conftest import _simulate_panel
 
 
@@ -144,7 +144,7 @@ def compare(title, dgp, method, r=0, lam=None, covars=None, se=False, nboots=200
             py_kw["n_jobs"] = 4
 
         t0 = time.time()
-        py_res = pyfect.fect(**py_kw)
+        py_res = pyfector.fect(**py_kw)
         py_time = time.time() - t0
 
         # --- R ---
@@ -162,7 +162,7 @@ def compare(title, dgp, method, r=0, lam=None, covars=None, se=False, nboots=200
         print(f"  Method: {method}" + (f", r={r}" if method == "ife" else "") +
               (f", lambda={lam}" if method == "mc" else ""))
 
-        print(f"\n  {'':30s} {'pyfect':>14s} {'R fect':>14s} {'Difference':>14s}")
+        print(f"\n  {'':30s} {'pyfector':>14s} {'R fect':>14s} {'Difference':>14s}")
         print(f"  {'-'*72}")
 
         # ATT
@@ -184,7 +184,7 @@ def compare(title, dgp, method, r=0, lam=None, covars=None, se=False, nboots=200
         r_time_on = np.array(r_res["time_on"])
         r_att_on = np.array(r_res["att_on"])
         print(f"\n  Dynamic ATT (post-treatment):")
-        print(f"  {'Period':>8s} {'pyfect':>12s} {'R fect':>12s} {'Diff':>12s} {'Count':>8s}")
+        print(f"  {'Period':>8s} {'pyfector':>12s} {'R fect':>12s} {'Diff':>12s} {'Count':>8s}")
         for t_val in range(min(8, len(py_res.time_on))):
             py_mask = py_res.time_on == t_val
             r_mask = r_time_on == t_val
@@ -197,7 +197,7 @@ def compare(title, dgp, method, r=0, lam=None, covars=None, se=False, nboots=200
         # SE comparison
         if se:
             print(f"\n  Inference ({nboots} bootstrap replications):")
-            print(f"  {'':30s} {'pyfect':>14s} {'R fect':>14s} {'Difference':>14s}")
+            print(f"  {'':30s} {'pyfector':>14s} {'R fect':>14s} {'Difference':>14s}")
             print(f"  {'-'*72}")
 
             r_se = r_res.get("att_avg_se", float('nan'))
@@ -244,7 +244,7 @@ def compare(title, dgp, method, r=0, lam=None, covars=None, se=False, nboots=200
 
 if __name__ == "__main__":
     print("=" * 80)
-    print("  pyfect vs R fect — Head-to-Head Comparison")
+    print("  pyfector vs R fect — Head-to-Head Comparison")
     print("=" * 80)
 
     # 1. FE, no factors, no covariates

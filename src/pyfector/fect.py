@@ -1,10 +1,10 @@
 """
-Main Fect estimator class — the public API of pyfect.
+Main Fect estimator class — the public API of pyfector.
 
 Usage:
-    import pyfect
+    import pyfector
 
-    result = pyfect.fect(
+    result = pyfector.fect(
         data=df,
         Y="outcome", D="treat",
         index=("unit", "year"),
@@ -96,7 +96,7 @@ class FectResult:
     def summary(self) -> str:
         """Print summary table of results."""
         lines = []
-        lines.append(f"pyfect estimation results")
+        lines.append(f"pyfector estimation results")
         lines.append(f"{'='*60}")
         lines.append(f"Method: {self.method}")
         if self.r_cv is not None:
@@ -143,12 +143,12 @@ class FectResult:
         return self.summary()
 
     def plot(self, kind="gap", **kwargs):
-        """Plot results. Shortcut for ``pyfect.plot(self, kind, ...)``."""
+        """Plot results. Shortcut for ``pyfector.plot(self, kind, ...)``."""
         from .plotting import plot as _plot
         return _plot(self, kind=kind, **kwargs)
 
     def diagnose(self, **kwargs):
-        """Run diagnostic tests. Shortcut for ``pyfect.run_diagnostics(self, ...)``."""
+        """Run diagnostic tests. Shortcut for ``pyfector.run_diagnostics(self, ...)``."""
         from .diagnostics import run_diagnostics
         return run_diagnostics(self, **kwargs)
 

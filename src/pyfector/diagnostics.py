@@ -1,5 +1,5 @@
 """
-Diagnostic tests for pyfect results.
+Diagnostic tests for pyfector results.
 
 Implements:
 - Pre-trend F-test (Wald-type joint significance)

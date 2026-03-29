@@ -7,14 +7,14 @@ import numpy as np
 import polars as pl
 import pytest
 
-import pyfect
+import pyfector
 
 
 class TestFESmoke:
     """Test method='fe' (plain fixed effects)."""
 
     def test_basic_fe(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -29,7 +29,7 @@ class TestFESmoke:
         assert result.method == "fe"
 
     def test_fe_unit_force(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -40,7 +40,7 @@ class TestFESmoke:
         assert result.att_avg != 0
 
     def test_fe_time_force(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -51,7 +51,7 @@ class TestFESmoke:
         assert result.att_avg != 0
 
     def test_fe_no_force(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -63,7 +63,7 @@ class TestFESmoke:
 
     def test_fe_att_near_true(self, small_panel):
         """ATT should be in the right ballpark of the true effect."""
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -79,7 +79,7 @@ class TestIFESmoke:
     """Test method='ife' (interactive fixed effects)."""
 
     def test_basic_ife_r0(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -92,7 +92,7 @@ class TestIFESmoke:
         assert result.att_avg != 0
 
     def test_basic_ife_r2(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -109,7 +109,7 @@ class TestIFESmoke:
 
     def test_ife_cv(self, small_panel):
         """IFE with cross-validation to select r."""
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -128,14 +128,14 @@ class TestIFESmoke:
         true_att = small_panel["true_att"]
         r_true = small_panel["r"]
 
-        fe_result = pyfect.fect(
+        fe_result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
             method="fe",
             seed=42,
         )
-        ife_result = pyfect.fect(
+        ife_result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -155,7 +155,7 @@ class TestMCSmoke:
     """Test method='mc' (matrix completion)."""
 
     def test_basic_mc(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -169,7 +169,7 @@ class TestMCSmoke:
 
     def test_mc_cv(self, small_panel):
         """MC with cross-validation to select lambda."""
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -188,7 +188,7 @@ class TestCovariateSmoke:
 
     def test_fe_with_covariates(self, panel_with_covariates):
         p = panel_with_covariates["p"]
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=panel_with_covariates["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -200,7 +200,7 @@ class TestCovariateSmoke:
         assert len(result.beta) == p
 
     def test_ife_with_covariates(self, panel_with_covariates):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=panel_with_covariates["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -218,7 +218,7 @@ class TestUnbalancedSmoke:
     """Test with unbalanced panels."""
 
     def test_fe_unbalanced(self, unbalanced_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=unbalanced_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -228,7 +228,7 @@ class TestUnbalancedSmoke:
         assert result.att_avg != 0
 
     def test_ife_unbalanced(self, unbalanced_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=unbalanced_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -244,7 +244,7 @@ class TestInferenceSmoke:
     """Test bootstrap and jackknife inference."""
 
     def test_bootstrap_fe(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -258,7 +258,7 @@ class TestInferenceSmoke:
         assert result.inference.att_avg_ci[0] < result.inference.att_avg_ci[1]
 
     def test_bootstrap_ife(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -274,7 +274,7 @@ class TestInferenceSmoke:
         assert len(result.inference.att_on_se) > 0
 
     def test_jackknife(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -291,7 +291,7 @@ class TestDynamicEffects:
     """Test dynamic treatment effects computation."""
 
     def test_dynamic_effects_exist(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -306,7 +306,7 @@ class TestDynamicEffects:
 
     def test_pre_treatment_effects_near_zero(self, small_panel):
         """Pre-treatment dynamic ATTs should be near zero for FE."""
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -327,7 +327,7 @@ class TestReproducibility:
 
     def test_seed_determinism(self, small_panel):
         """Same seed -> same result."""
-        r1 = pyfect.fect(
+        r1 = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -336,7 +336,7 @@ class TestReproducibility:
             CV=False,
             seed=42,
         )
-        r2 = pyfect.fect(
+        r2 = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -350,7 +350,7 @@ class TestReproducibility:
 
     def test_different_seed_different_cv(self, small_panel):
         """Different seeds may give different CV results (but both valid)."""
-        r1 = pyfect.fect(
+        r1 = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -360,7 +360,7 @@ class TestReproducibility:
             k=5,
             seed=42,
         )
-        r2 = pyfect.fect(
+        r2 = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -379,7 +379,7 @@ class TestSummaryAndPlot:
     """Test output formatting."""
 
     def test_summary_string(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -392,7 +392,7 @@ class TestSummaryAndPlot:
 
     def test_plot_gap(self, small_panel):
         """Plotting should not raise."""
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -401,11 +401,11 @@ class TestSummaryAndPlot:
         )
         import matplotlib
         matplotlib.use("Agg")
-        fig = pyfect.plot(result, kind="gap")
+        fig = pyfector.plot(result, kind="gap")
         assert fig is not None
 
     def test_plot_status(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -414,5 +414,5 @@ class TestSummaryAndPlot:
         )
         import matplotlib
         matplotlib.use("Agg")
-        fig = pyfect.plot(result, kind="status")
+        fig = pyfector.plot(result, kind="status")
         assert fig is not None

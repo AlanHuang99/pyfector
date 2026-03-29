@@ -1,6 +1,6 @@
-# pyfect
+# pyfector
 
-> **Alpha (v0.1.x)** -- This package is in early development. Results have been validated against R fect on synthetic data, but edge cases may remain. **APIs are not stable and may change without notice.** Please verify critical results independently. Bug reports, feature requests, and contributions are welcome via [GitHub Issues](https://github.com/AlanHuang99/pyfect/issues).
+> **Alpha (v0.1.x)** -- This package is in early development. Results have been validated against R fect on synthetic data, but edge cases may remain. **APIs are not stable and may change without notice.** Please verify critical results independently. Bug reports, feature requests, and contributions are welcome via [GitHub Issues](https://github.com/AlanHuang99/pyfector/issues).
 
 Fast counterfactual estimators for panel data in Python.
 
@@ -9,22 +9,20 @@ A high-performance reimplementation of the R [fect](https://github.com/xuyiqing/
 ## Installation
 
 ```bash
-pip install fectpy
+pip install pyfector
 ```
 
 For GPU support:
 ```bash
-pip install fectpy[gpu]
+pip install pyfector[gpu]
 ```
-
-> **Note**: The PyPI package is `fectpy`, but the import name is `pyfect` — i.e. `import pyfect`.
 
 ## Quick Start
 
 ```python
-import pyfect
+import pyfector
 
-result = pyfect.fect(
+result = pyfector.fect(
     data=df,                    # Polars or Pandas DataFrame
     Y="outcome",                # outcome column
     D="treatment",              # binary treatment indicator
@@ -62,12 +60,12 @@ print(diag.summary())
 
 ## API Reference
 
-### `pyfect.fect()`
+### `pyfector.fect()`
 
 Main estimation function. Returns a `FectResult` object.
 
 ```python
-pyfect.fect(
+pyfector.fect(
     data,                           # DataFrame (Polars or Pandas)
     Y: str,                         # outcome column name
     D: str,                         # treatment column name (0/1)
@@ -161,11 +159,11 @@ print(diag.summary())
 
 ## Validation Against R fect
 
-pyfect is validated against the original R fect package on identical simulated data. The table below shows exact comparison results (N=200, T=50):
+pyfector is validated against the original R fect package on identical simulated data. The table below shows exact comparison results (N=200, T=50):
 
 ### Point Estimates
 
-| Scenario | pyfect ATT | R fect ATT | Difference | True ATT |
+| Scenario | pyfector ATT | R fect ATT | Difference | True ATT |
 |----------|------------|------------|------------|----------|
 | FE (no factors) | 4.995583 | 4.995640 | -0.000057 | 5.0 |
 | FE + covariates | 4.975683 | 4.975809 | -0.000126 | 5.0 |
@@ -177,7 +175,7 @@ pyfect is validated against the original R fect package on identical simulated d
 
 ### Standard Errors (500 bootstrap replications)
 
-| Scenario | pyfect SE | R fect SE | Ratio |
+| Scenario | pyfector SE | R fect SE | Ratio |
 |----------|-----------|-----------|-------|
 | FE (500 boots) | 0.020011 | 0.021291 | 0.94 |
 | IFE r=2 (500 boots) | 0.017128 | 0.018382 | 0.93 |
@@ -186,7 +184,7 @@ pyfect is validated against the original R fect package on identical simulated d
 
 ### Covariate Coefficients
 
-| Covariate | pyfect | R fect | Difference |
+| Covariate | pyfector | R fect | Difference |
 |-----------|--------|--------|------------|
 | X1 | 0.817041 | 0.817042 | -0.000001 |
 | X2 | 1.173748 | 1.173747 | +0.000000 |
@@ -196,9 +194,9 @@ pyfect is validated against the original R fect package on identical simulated d
 
 ## Performance
 
-The key bottleneck in R fect is full SVD inside the EM loop: O(NT min(N,T)) per iteration. pyfect uses randomized truncated SVD for large matrices: O(NTr) where r << min(N,T).
+The key bottleneck in R fect is full SVD inside the EM loop: O(NT min(N,T)) per iteration. pyfector uses randomized truncated SVD for large matrices: O(NTr) where r << min(N,T).
 
-| Scenario | pyfect | R fect | Speedup |
+| Scenario | pyfector | R fect | Speedup |
 |----------|--------|--------|---------|
 | FE, N=200 T=50 | 0.01s | 0.05s | 5x |
 | IFE, N=200 T=50 | 0.08s | 0.06s | 0.7x |

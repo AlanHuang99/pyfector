@@ -1,5 +1,5 @@
 """
-Pressure tests: verify pyfect handles large datasets and edge cases.
+Pressure tests: verify pyfector handles large datasets and edge cases.
 """
 
 import numpy as np
@@ -7,7 +7,7 @@ import polars as pl
 import pytest
 import time
 
-import pyfect
+import pyfector
 
 
 class TestLargeDatasets:
@@ -16,7 +16,7 @@ class TestLargeDatasets:
     def test_large_fe(self, large_panel):
         """N=2000, T=100 with FE should complete in reasonable time."""
         start = time.time()
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=large_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -31,7 +31,7 @@ class TestLargeDatasets:
     def test_large_ife_r2(self, large_panel):
         """N=2000, T=100 with IFE r=2 — the key performance benchmark."""
         start = time.time()
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=large_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -49,7 +49,7 @@ class TestLargeDatasets:
     def test_large_mc(self, large_panel):
         """N=2000, T=100 with MC."""
         start = time.time()
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=large_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -69,7 +69,7 @@ class TestLargeDatasets:
         panel = _simulate_panel(N=10000, T=200, N_treated=4000, r=2, seed=999)
 
         start = time.time()
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -90,7 +90,7 @@ class TestEdgeCases:
         """Only one treated unit."""
         from tests.conftest import _simulate_panel
         panel = _simulate_panel(N=20, T=15, N_treated=1, r=0, seed=111)
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -109,14 +109,14 @@ class TestEdgeCases:
                 d = 1 if (j < 10 and t >= T - 2) else 0
                 rows.append({"unit": j, "time": t, "Y": float(rng.normal(t + j * 0.1 + d * 2)), "D": d})
         df = pl.DataFrame(rows)
-        result = pyfect.fect(data=df, Y="Y", D="D", index=("unit", "time"), method="fe", seed=42)
+        result = pyfector.fect(data=df, Y="Y", D="D", index=("unit", "time"), method="fe", seed=42)
         assert result.att_avg != 0
 
     def test_many_missing_obs(self):
         """50% missing observations."""
         from tests.conftest import _simulate_panel
         panel = _simulate_panel(N=40, T=20, N_treated=15, r=1, seed=333, missing_frac=0.4)
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -128,7 +128,7 @@ class TestEdgeCases:
 
     def test_no_covariates(self, small_panel):
         """Explicit test with no covariates."""
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -141,7 +141,7 @@ class TestEdgeCases:
 
     def test_high_r(self, small_panel):
         """r larger than reasonable — should still work."""
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -154,7 +154,7 @@ class TestEdgeCases:
 
     def test_lambda_zero(self, small_panel):
         """MC with lambda=0 (no regularization)."""
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -167,7 +167,7 @@ class TestEdgeCases:
 
     def test_lambda_large(self, small_panel):
         """MC with very large lambda (heavy regularization)."""
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -185,7 +185,7 @@ class TestParallelComputing:
 
     def test_parallel_cv(self, small_panel):
         """CV with n_jobs=2."""
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -200,7 +200,7 @@ class TestParallelComputing:
 
     def test_parallel_bootstrap(self, small_panel):
         """Bootstrap with n_jobs=2."""
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -219,7 +219,7 @@ class TestNormalization:
 
     def test_normalize_similar_att(self, small_panel):
         """Normalized and unnormalized should give similar ATT."""
-        r1 = pyfect.fect(
+        r1 = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -227,7 +227,7 @@ class TestNormalization:
             normalize=False,
             seed=42,
         )
-        r2 = pyfect.fect(
+        r2 = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -243,7 +243,7 @@ class TestDiagnostics:
     """Test diagnostic tests."""
 
     def test_diagnostics_run(self, small_panel):
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=small_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -252,14 +252,14 @@ class TestDiagnostics:
             nboots=50,
             seed=42,
         )
-        diag = pyfect.run_diagnostics(result, f_threshold=0.5, tost_threshold=0.36)
+        diag = pyfector.run_diagnostics(result, f_threshold=0.5, tost_threshold=0.36)
         assert diag is not None
         s = diag.summary()
         assert "Diagnostic" in s
 
     def test_zero_effect_diagnostics(self, zero_effect_panel):
         """With zero true effect, pre-trend test should not reject."""
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=zero_effect_panel["data"],
             Y="Y", D="D",
             index=("unit", "time"),
@@ -270,7 +270,7 @@ class TestDiagnostics:
             nboots=50,
             seed=42,
         )
-        diag = pyfect.run_diagnostics(result)
+        diag = pyfector.run_diagnostics(result)
         # With zero effect, the F-test p-value should be large
         if diag.f_pval is not None:
             # Not a hard assertion since small sample can be noisy

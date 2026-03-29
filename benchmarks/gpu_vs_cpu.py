@@ -1,5 +1,5 @@
 """
-GPU vs CPU benchmark for pyfect.
+GPU vs CPU benchmark for pyfector.
 
 Tests different panel sizes and measures wall-clock time for:
 1. CPU (NumPy)
@@ -51,9 +51,9 @@ def generate_panel(N, T, N_treated, r=2, p=0, delta=3.0, seed=42):
 
 def benchmark_single(Y, II, X, r, force, device, tol=1e-5, max_iter=500):
     """Time a single estimation."""
-    from pyfect.backend import set_device, to_device
-    from pyfect.panel import initial_fit
-    from pyfect.estimators import estimate_ife
+    from pyfector.backend import set_device, to_device
+    from pyfector.panel import initial_fit
+    from pyfector.estimators import estimate_ife
 
     set_device(device)
     Y_d = to_device(Y)
@@ -90,10 +90,10 @@ def benchmark_single(Y, II, X, r, force, device, tol=1e-5, max_iter=500):
 def benchmark_bootstrap(Y, D, I, II, T_on, X, unit_type, r, force, device,
                         nboots=50):
     """Time bootstrap inference."""
-    from pyfect.backend import set_device, to_device, to_numpy
-    from pyfect.panel import initial_fit
-    from pyfect.estimators import estimate_ife
-    from pyfect.inference import bootstrap
+    from pyfector.backend import set_device, to_device, to_numpy
+    from pyfector.panel import initial_fit
+    from pyfector.estimators import estimate_ife
+    from pyfector.inference import bootstrap
 
     set_device(device)
     Y_d = to_device(Y)

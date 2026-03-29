@@ -19,7 +19,7 @@ import polars as pl
 import pytest
 import time
 
-import pyfect
+import pyfector
 from tests.conftest import _simulate_panel
 
 
@@ -29,7 +29,7 @@ from tests.conftest import _simulate_panel
 
 def _quick_result(panel, method="fe", r=0, nboots=50, seed=42, n_jobs=1, **kw):
     """Run fect with SE for a given panel."""
-    return pyfect.fect(
+    return pyfector.fect(
         data=panel["data"], Y="Y", D="D", index=("unit", "time"),
         method=method, r=r, CV=False, se=True, nboots=nboots,
         seed=seed, n_jobs=n_jobs, **kw,
@@ -131,7 +131,7 @@ class TestBootstrapJackknifeConsistency:
         panel = _simulate_panel(N=50, T=20, N_treated=20, r=0, delta=3.0, seed=42)
 
         boot_result = _quick_result(panel, method="fe", nboots=200, seed=42)
-        jack_result = pyfect.fect(
+        jack_result = pyfector.fect(
             data=panel["data"], Y="Y", D="D", index=("unit", "time"),
             method="fe", se=True, vartype="jackknife", seed=42,
         )
@@ -149,7 +149,7 @@ class TestBootstrapJackknifeConsistency:
         panel = _simulate_panel(N=50, T=20, N_treated=20, r=2, delta=3.0, seed=42)
 
         boot_result = _quick_result(panel, method="ife", r=2, nboots=200, seed=42)
-        jack_result = pyfect.fect(
+        jack_result = pyfector.fect(
             data=panel["data"], Y="Y", D="D", index=("unit", "time"),
             method="ife", r=2, CV=False, se=True, vartype="jackknife", seed=42,
         )
@@ -551,7 +551,7 @@ class TestJackknifeSE:
     def test_jackknife_n_replications(self):
         """Jackknife should produce N replications (one per unit)."""
         panel = _simulate_panel(N=40, T=20, N_treated=15, r=0, delta=3.0, seed=42)
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=panel["data"], Y="Y", D="D", index=("unit", "time"),
             method="fe", se=True, vartype="jackknife", seed=42,
         )
@@ -562,7 +562,7 @@ class TestJackknifeSE:
 
     def test_jackknife_se_positive(self):
         panel = _simulate_panel(N=40, T=20, N_treated=15, r=0, delta=3.0, seed=42)
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=panel["data"], Y="Y", D="D", index=("unit", "time"),
             method="fe", se=True, vartype="jackknife", seed=42,
         )
@@ -573,7 +573,7 @@ class TestJackknifeSE:
 
     def test_jackknife_avg_finite(self):
         panel = _simulate_panel(N=40, T=20, N_treated=15, r=0, delta=3.0, seed=42)
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=panel["data"], Y="Y", D="D", index=("unit", "time"),
             method="fe", se=True, vartype="jackknife", seed=42,
         )
@@ -587,7 +587,7 @@ class TestJackknifeSE:
     def test_jackknife_ife(self):
         """Jackknife with IFE should work."""
         panel = _simulate_panel(N=40, T=20, N_treated=15, r=2, delta=3.0, seed=42)
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=panel["data"], Y="Y", D="D", index=("unit", "time"),
             method="ife", r=2, CV=False, se=True, vartype="jackknife", seed=42,
         )
@@ -604,7 +604,7 @@ class TestBootstrapWithCovariates:
 
     def test_se_with_covariates(self):
         panel = _simulate_panel(N=80, T=25, N_treated=30, r=0, p=2, delta=3.0, seed=42)
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=panel["data"], Y="Y", D="D", index=("unit", "time"),
             X=panel["covariate_names"], method="fe",
             se=True, nboots=100, seed=42,
@@ -615,7 +615,7 @@ class TestBootstrapWithCovariates:
 
     def test_ife_se_with_covariates(self):
         panel = _simulate_panel(N=80, T=25, N_treated=30, r=2, p=2, delta=3.0, seed=42)
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=panel["data"], Y="Y", D="D", index=("unit", "time"),
             X=panel["covariate_names"], method="ife", r=2, CV=False,
             se=True, nboots=100, seed=42,

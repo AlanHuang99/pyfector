@@ -1,5 +1,5 @@
 """
-pyfect — Fast counterfactual estimators for panel data in Python.
+pyfector — Fast counterfactual estimators for panel data in Python.
 
 A high-performance Python reimplementation of the R ``fect`` package,
 featuring randomized SVD, GPU acceleration (CuPy), parallel computing
@@ -7,9 +7,9 @@ featuring randomized SVD, GPU acceleration (CuPy), parallel computing
 
 Usage::
 
-    import pyfect
+    import pyfector
 
-    result = pyfect.fect(
+    result = pyfector.fect(
         data=df,
         Y="outcome", D="treat",
         index=("unit", "year"),

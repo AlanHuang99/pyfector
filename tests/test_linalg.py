@@ -5,7 +5,7 @@ Unit tests for core linear algebra operations.
 import numpy as np
 import pytest
 
-from pyfect.linalg import (
+from pyfector.linalg import (
     truncated_svd,
     panel_factor,
     panel_FE,

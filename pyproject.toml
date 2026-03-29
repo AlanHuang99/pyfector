@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "fectpy"
+name = "pyfector"
 version = "0.1.0"
 description = "Fast counterfactual estimators for panel data — Python reimplementation of R fect"
 readme = "README.md"
@@ -55,7 +55,7 @@ r-comparison = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/pyfect"]
+packages = ["src/pyfector"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

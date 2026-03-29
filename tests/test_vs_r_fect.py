@@ -1,5 +1,5 @@
 """
-Cross-validation tests: compare pyfect results against R fect.
+Cross-validation tests: compare pyfector results against R fect.
 
 Calls R via subprocess and exchanges data via CSV/JSON.
 """
@@ -13,7 +13,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-import pyfect
+import pyfector
 from tests.conftest import _simulate_panel
 
 
@@ -135,12 +135,12 @@ def _make_shared_data(N=100, T=30, N_treated=40, r=2, p=0, delta=3.0, seed=42):
 
 
 class TestFEvsR:
-    """Compare FE results between pyfect and R fect."""
+    """Compare FE results between pyfector and R fect."""
 
     def test_fe_att_comparison(self):
         csv_path, df_pl, delta, _ = _make_shared_data(N=100, T=30, p=0, r=0)
         try:
-            py = pyfect.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
+            py = pyfector.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
                              method="fe", force="two-way", seed=42)
             r_res = _run_r_fect(csv_path, method="fe", r=0, force="two-way")
 
@@ -153,7 +153,7 @@ class TestFEvsR:
     def test_fe_with_covariates(self):
         csv_path, df_pl, delta, covars = _make_shared_data(N=100, T=30, p=2, r=0)
         try:
-            py = pyfect.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
+            py = pyfector.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
                              X=covars, method="fe", force="two-way", seed=42)
             r_res = _run_r_fect(csv_path, method="fe", r=0, force="two-way",
                                 covariates=covars)
@@ -168,7 +168,7 @@ class TestFEvsR:
     def test_force_options(self, force):
         csv_path, df_pl, delta, _ = _make_shared_data(N=80, T=25, r=0, p=0, seed=888)
         try:
-            py = pyfect.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
+            py = pyfector.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
                              method="fe", force=force, seed=42)
             r_res = _run_r_fect(csv_path, method="fe", r=0, force=force)
 
@@ -185,7 +185,7 @@ class TestIFEvsR:
     def test_ife_r0(self):
         csv_path, df_pl, delta, _ = _make_shared_data(N=100, T=30, p=0, r=0)
         try:
-            py = pyfect.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
+            py = pyfector.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
                              method="ife", r=0, CV=False, seed=42)
             r_res = _run_r_fect(csv_path, method="ife", r=0, force="two-way")
 
@@ -198,7 +198,7 @@ class TestIFEvsR:
     def test_ife_r2(self):
         csv_path, df_pl, delta, _ = _make_shared_data(N=100, T=30, r=2, p=0)
         try:
-            py = pyfect.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
+            py = pyfector.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
                              method="ife", r=2, CV=False, seed=42)
             r_res = _run_r_fect(csv_path, method="ife", r=2, force="two-way")
 
@@ -212,7 +212,7 @@ class TestIFEvsR:
         """Post-treatment dynamic ATTs should be similar."""
         csv_path, df_pl, delta, _ = _make_shared_data(N=100, T=30, r=2, p=0)
         try:
-            py = pyfect.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
+            py = pyfector.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
                              method="ife", r=2, CV=False, seed=42)
             r_res = _run_r_fect(csv_path, method="ife", r=2, force="two-way")
 
@@ -239,7 +239,7 @@ class TestATTAccuracy:
         csv_path, df_pl, delta, _ = _make_shared_data(N=200, T=50, r=0, p=0,
                                                        delta=5.0, seed=555)
         try:
-            py = pyfect.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
+            py = pyfector.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
                              method="fe", seed=42)
             r_res = _run_r_fect(csv_path, method="fe", r=0, force="two-way")
 
@@ -254,7 +254,7 @@ class TestATTAccuracy:
         csv_path, df_pl, delta, _ = _make_shared_data(N=200, T=50, r=2, p=0,
                                                        delta=3.0, seed=666)
         try:
-            py = pyfect.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
+            py = pyfector.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
                              method="ife", r=2, CV=False, seed=42)
             r_res = _run_r_fect(csv_path, method="ife", r=2, force="two-way")
 
@@ -270,13 +270,13 @@ class TestATTAccuracy:
 
 
 class TestBootstrapSEvsR:
-    """Compare bootstrap SE between pyfect and R fect."""
+    """Compare bootstrap SE between pyfector and R fect."""
 
     def test_bootstrap_se_same_ballpark(self):
         """Bootstrap SE should be in same order of magnitude."""
         csv_path, df_pl, delta, _ = _make_shared_data(N=80, T=25, r=0, p=0, seed=777)
         try:
-            py = pyfect.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
+            py = pyfector.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
                              method="fe", se=True, nboots=500, seed=42)
             r_res = _run_r_fect(csv_path, method="fe", r=0, force="two-way",
                                 se=True, nboots=500)
@@ -303,7 +303,7 @@ class TestBootstrapSEvsR:
         """1000 boots: ATT point estimates should be very close."""
         csv_path, df_pl, delta, _ = _make_shared_data(N=100, T=30, r=0, p=0, seed=999)
         try:
-            py = pyfect.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
+            py = pyfector.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
                              method="fe", se=True, nboots=1000, seed=42, n_jobs=4)
             r_res = _run_r_fect(csv_path, method="fe", r=0, force="two-way",
                                 se=True, nboots=1000)
@@ -321,7 +321,7 @@ class TestBootstrapSEvsR:
         """IFE with bootstrap: compare SE."""
         csv_path, df_pl, delta, _ = _make_shared_data(N=100, T=30, r=2, p=0, seed=1234)
         try:
-            py = pyfect.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
+            py = pyfector.fect(data=df_pl, Y="Y", D="D", index=("unit", "time"),
                              method="ife", r=2, CV=False,
                              se=True, nboots=500, seed=42)
             r_res = _run_r_fect(csv_path, method="ife", r=2, force="two-way",

@@ -2,12 +2,12 @@
 Array backend abstraction: seamless NumPy / CuPy switching.
 
 Usage:
-    from pyfect.backend import get_backend, set_device
+    from pyfector.backend import get_backend, set_device
     set_device("gpu")          # or "cpu" (default)
     xp = get_backend()         # returns numpy or cupy module
     A = xp.random.randn(100, 50)
 
-All pyfect internals call ``get_backend()`` to obtain the active array
+All pyfector internals call ``get_backend()`` to obtain the active array
 module, so every matrix operation automatically runs on CPU or GPU.
 """
 

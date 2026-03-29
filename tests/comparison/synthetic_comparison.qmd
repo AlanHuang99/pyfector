@@ -1,5 +1,5 @@
 ---
-title: "Synthetic Panel: R fect vs Python pyfect"
+title: "Synthetic Panel: R fect vs Python pyfector"
 author: "Alan Huang"
 date: "2026"
 format:
@@ -30,7 +30,7 @@ tr:hover { background: #f9f9f9; }
 ```
 
 This document generates synthetic panel data with known DGP parameters,
-estimates FE / IFE / MC in **both R fect and Python pyfect** (1000 bootstrap),
+estimates FE / IFE / MC in **both R fect and Python pyfector** (1000 bootstrap),
 and compares ATT, betas, SEs, and p-values side by side.
 
 Two scenarios: (A) balanced panel, (B) 5 % randomly dropped observations.
@@ -153,7 +153,7 @@ if result.returncode != 0:
     print("STDERR:", result.stderr[-2000:])
 ```
 
-# 2 -- Python pyfect Estimation
+# 2 -- Python pyfector Estimation
 
 ```{python}
 #| label: py-estimate
@@ -162,7 +162,7 @@ if result.returncode != 0:
 import json, time
 import numpy as np
 import polars as pl
-import pyfect
+import pyfector
 from IPython.display import display, HTML
 
 np.random.seed(123)
@@ -188,7 +188,7 @@ for scenario, df in [("full", df_full), ("drop", df_drop)]:
         ("mc",  dict(method="mc",  force="two-way", CV=True)),
     ]:
         t0 = time.time()
-        result = pyfect.fect(
+        result = pyfector.fect(
             data=df, Y="Y", D="D",
             index=("id", "time"), X=covariates,
             se=True, nboots=1000, n_jobs=16, seed=123,
@@ -334,7 +334,7 @@ for row_idx, (scenario, slab) in enumerate([("full", "Balanced"), ("drop", "5% D
         ax.set_xlabel("Periods Rel. to Treatment" if row_idx == 1 else "")
         ax.tick_params(labelsize=9); ax.legend(fontsize=8, loc="upper left")
 
-plt.suptitle("Dynamic Treatment Effects (pyfect) -- True ATT = 1.5",
+plt.suptitle("Dynamic Treatment Effects (pyfector) -- True ATT = 1.5",
              fontsize=16, fontweight="bold", y=1.01)
 plt.tight_layout(); plt.show()
 ```
@@ -364,7 +364,7 @@ for scenario, slab in [("full", "Balanced"), ("drop", "5% Dropped")]:
 
 # 6 -- Built-in Plots
 
-## Gap Plots (Event Study via pyfect.plot)
+## Gap Plots (Event Study via pyfector.plot)
 
 ```{python}
 #| label: gap-plots
@@ -391,7 +391,7 @@ for row_idx, (scenario, slab) in enumerate([("full", "Balanced"), ("drop", "5% D
             ax.set_ylabel(slab, fontsize=12, fontweight="bold")
         ax.legend(fontsize=8, loc="upper left")
 
-plt.suptitle("Gap Plots (pyfect built-in) -- True ATT = 1.5",
+plt.suptitle("Gap Plots (pyfector built-in) -- True ATT = 1.5",
              fontsize=16, fontweight="bold", y=1.01)
 plt.tight_layout(); plt.show()
 ```
@@ -462,5 +462,5 @@ for scenario, slab in [("full", "Balanced"), ("drop", "5% Dropped")]:
     print(f"  Models compared      : {n_total}")
     print(f"  Significance match   : {n_sig}/{n_total}")
     print(f"  ATT within 10% of R  : {n_close}/{n_total}\n")
-print(f"Python: {sys.version.split()[0]} | pyfect: {pyfect.__version__} | numpy: {np.__version__}")
+print(f"Python: {sys.version.split()[0]} | pyfector: {pyfector.__version__} | numpy: {np.__version__}")
 ```

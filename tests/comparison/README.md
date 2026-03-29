@@ -1,10 +1,10 @@
-# R fect vs Python pyfect Comparison
+# R fect vs Python pyfector Comparison
 
-Synthetic panel data comparison between R `fect` and Python `pyfect`.
+Synthetic panel data comparison between R `fect` and Python `pyfector`.
 
 ## Synthetic Comparison
 
-**[View rendered results (HTML)](https://htmlpreview.github.io/?https://github.com/AlanHuang99/pyfect/blob/main/tests/comparison/synthetic_comparison.html)**
+**[View rendered results (HTML)](https://htmlpreview.github.io/?https://github.com/AlanHuang99/pyfector/blob/main/tests/comparison/synthetic_comparison.html)**
 
 ### DGP
 
@@ -25,9 +25,9 @@ All significance levels match (6/6). Betas match to < 0.002.
 
 ## How to render
 
-Requires R with the `fect` package and Python with `pyfect` installed.
+Requires R with the `fect` package and Python with `pyfector` installed.
 
 ```bash
-pip install -e .          # install pyfect
+pip install -e .          # install pyfector
 quarto render tests/comparison/synthetic_comparison.qmd
 ```

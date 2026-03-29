@@ -1,5 +1,5 @@
 """
-Plotting functions for pyfect results.
+Plotting functions for pyfector results.
 
 Produces matplotlib/plotly figures equivalent to R fect's plot types:
 - gap: dynamic treatment effects with CI bands
@@ -31,7 +31,7 @@ def plot(
     Parameters
     ----------
     result : FectResult
-        Output from ``pyfect.fect()``.
+        Output from ``pyfector.fect()``.
     kind : str
         Plot type.
     units : list, optional

@@ -31,7 +31,7 @@ jobs:
           name: dist
           path: dist/
 
-  # pyfect is pure Python — one wheel works on all platforms.
+  # pyfector is pure Python — one wheel works on all platforms.
   # No need for cibuildwheel or platform-specific builds.
   # The py3-none-any wheel is universal.
   verify:
@@ -60,9 +60,9 @@ jobs:
         shell: bash
         run: |
           python -c "
-          import pyfect
-          print(f'pyfect {pyfect.__version__} loaded successfully')
-          print(f'Device: {pyfect.get_device()}')
+          import pyfector
+          print(f'pyfector {pyfector.__version__} loaded successfully')
+          print(f'Device: {pyfector.get_device()}')
           "
 
   upload-release:
@@ -91,7 +91,7 @@ jobs:
       id-token: write
     environment:
       name: pypi
-      url: https://pypi.org/p/pyfect
+      url: https://pypi.org/p/pyfector
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4

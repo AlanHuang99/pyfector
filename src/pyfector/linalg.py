@@ -1,5 +1,5 @@
 """
-Core linear algebra primitives for pyfect.
+Core linear algebra primitives for pyfector.
 
 Key performance improvement over R fect: **randomized / truncated SVD**
 instead of full SVD.  For a T×N matrix with rank-r target the cost drops

@@ -1,5 +1,5 @@
 """
-Shared fixtures for pyfect tests.
+Shared fixtures for pyfector tests.
 
 Generates simulated panel data with known DGP (data generating process)
 matching fect's simulation approach:

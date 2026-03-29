@@ -12,8 +12,8 @@ sys.path.insert(0, ".")
 
 import numpy as np
 import polars as pl
-import pyfect
-from pyfect.backend import set_device
+import pyfector
+from pyfector.backend import set_device
 
 def simulate(N, T, N_treated, r=2, delta=3.0, seed=42):
     rng = np.random.default_rng(seed)
@@ -79,7 +79,7 @@ for N, T, N_tr, nboots, label in scenarios:
 
         # Point estimate
         t0 = time.perf_counter()
-        res_point = pyfect.fect(
+        res_point = pyfector.fect(
             data=df, Y="Y", D="D", index=("unit", "time"),
             method="ife", r=2, CV=False, se=False,
             device=device, seed=42,
@@ -88,7 +88,7 @@ for N, T, N_tr, nboots, label in scenarios:
 
         # Bootstrap SE
         t0 = time.perf_counter()
-        res_boot = pyfect.fect(
+        res_boot = pyfector.fect(
             data=df, Y="Y", D="D", index=("unit", "time"),
             method="ife", r=2, CV=False,
             se=True, nboots=nboots, n_jobs=1,
