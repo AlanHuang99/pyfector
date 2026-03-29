@@ -138,8 +138,12 @@ write_json(export, "/tmp/synth_r_results.json", auto_unbox=TRUE)
 cat("\nDone.\n")
 """)
 
-import os
+import os, pathlib
 env = os.environ.copy()
+# Ensure R can find user-installed packages
+r_user_lib = pathlib.Path.home() / "R" / "x86_64-pc-linux-gnu-library" / "4.3"
+if r_user_lib.exists():
+    env["R_LIBS_USER"] = str(r_user_lib)
 result = subprocess.run(
     ["Rscript", "--vanilla", "-e", r_script],
     capture_output=True, text=True, timeout=1800, env=env,
