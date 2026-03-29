@@ -18,7 +18,7 @@ import numpy as np
 import polars as pl
 
 import pyfector
-from tests.conftest import _simulate_panel
+from conftest import _simulate_panel
 
 
 def run_r_fect(csv_path, method, r, force="two-way", covariates=None,

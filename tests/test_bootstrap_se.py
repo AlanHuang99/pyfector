@@ -20,7 +20,7 @@ import pytest
 import time
 
 import pyfector
-from tests.conftest import _simulate_panel
+from conftest import _simulate_panel
 
 
 # ---------------------------------------------------------------------------

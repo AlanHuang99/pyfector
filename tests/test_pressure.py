@@ -65,7 +65,7 @@ class TestLargeDatasets:
     @pytest.mark.slow
     def test_very_large_panel(self):
         """N=10000, T=200 — the target use case."""
-        from tests.conftest import _simulate_panel
+        from conftest import _simulate_panel
         panel = _simulate_panel(N=10000, T=200, N_treated=4000, r=2, seed=999)
 
         start = time.time()
@@ -88,7 +88,7 @@ class TestEdgeCases:
 
     def test_single_treated_unit(self):
         """Only one treated unit."""
-        from tests.conftest import _simulate_panel
+        from conftest import _simulate_panel
         panel = _simulate_panel(N=20, T=15, N_treated=1, r=0, seed=111)
         result = pyfector.fect(
             data=panel["data"],
@@ -114,7 +114,7 @@ class TestEdgeCases:
 
     def test_many_missing_obs(self):
         """50% missing observations."""
-        from tests.conftest import _simulate_panel
+        from conftest import _simulate_panel
         panel = _simulate_panel(N=40, T=20, N_treated=15, r=1, seed=333, missing_frac=0.4)
         result = pyfector.fect(
             data=panel["data"],

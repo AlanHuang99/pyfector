@@ -14,7 +14,7 @@ import polars as pl
 import pytest
 
 import pyfector
-from tests.conftest import _simulate_panel
+from conftest import _simulate_panel
 
 
 def _r_available():
