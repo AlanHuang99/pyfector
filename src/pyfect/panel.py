@@ -73,7 +73,7 @@ def prepare_panel(
     W: str | None = None,
     group: str | None = None,
     min_T0: int = 1,
-    max_missing: float = 0.5,
+    max_missing: float = 1.0,
 ) -> PanelData:
     """Convert long-format data to panel matrices.
 
@@ -353,8 +353,7 @@ def initial_fit(
     """Compute initial fitted values (Y0) and beta0 using OLS on control obs.
 
     Equivalent to R fect's ``initialFit()`` using fixest::feols.
-    Here we use a simpler approach: demean by unit/time FE on control obs,
-    then regress residuals on X.
+    Uses simple demeaning on control observations for initial FE estimates.
     """
     xp = get_backend()
     T, N = Y.shape
@@ -388,15 +387,12 @@ def initial_fit(
         Y0 = Y0 + (alpha - mu)[None, :]
     if xi is not None:
         Y0 = Y0 + (xi - mu)[:, None]
-    if force == 3:
-        Y0 = Y0 + mu
 
-    # Beta from control obs
+    # Beta from control obs via OLS: (Y - FE) ~ X
     beta0 = None
     if X is not None and X.shape[2] > 0:
         p = X.shape[2]
         resid = (Y - Y0) * II
-        # Simple OLS on control obs: X'X beta = X'resid
         xx = xp.zeros((p, p))
         xy = xp.zeros(p)
         for k in range(p):

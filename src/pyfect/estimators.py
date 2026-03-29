@@ -99,7 +99,7 @@ def estimate_ife(
     r: int,               # number of factors
     force: int,           # FE type: 0/1/2/3
     tol: float = 1e-5,
-    max_iter: int = 1000,
+    max_iter: int = 5000,
 ) -> EstimationResult:
     """EM algorithm for interactive fixed effects on unbalanced panels.
 
@@ -306,33 +306,73 @@ def _em_fe_ad_covar(Y, Y0, X, I, W, WI, use_weight, beta, xxinv, force, tol, max
     FE = fit - cf
     converged = False
 
-    for niter in range(1, max_iter + 1):
+    def _one_em_step(fit_in, FE_in, beta_in):
+        """One complete EM iteration.  Returns (fit, FE, beta, ife_res)."""
+        if use_weight:
+            YY = _we_adj(Y, fit_in, W, I)
+        else:
+            YY = _e_adj(Y, fit_in, I)
+        b = panel_beta(X, YY, FE_in, xxinv, W=WI if use_weight else None)
+        c = covar_fit(X, b)
+        if use_weight:
+            U = _we_adj(YY - c, FE_in, W, I)
+        else:
+            U = _e_adj(YY - c, FE_in, I)
+        ires = ife(U, force, mc=False, r=0)
+        return c + ires.FE, ires.FE, b, ires
+
+    # SQUAREM acceleration (Varadhan & Roland 2008).
+    # Every 3rd step we extrapolate; otherwise plain EM.
+    niter = 0
+    ife_res = None
+    while niter < max_iter:
         fit_old = fit.copy()
 
-        # E-step
-        if use_weight:
-            YY = _we_adj(Y, fit, W, I)
+        # Step 1: EM
+        fit1, FE1, beta1, ife_res1 = _one_em_step(fit, FE, beta)
+        niter += 1
+
+        dif = _frob_ratio(fit1, fit_old, W=WI if use_weight else None)
+        if dif < tol:
+            fit, FE, beta, ife_res = fit1, FE1, beta1, ife_res1
+            converged = True
+            break
+
+        # Step 2: second EM
+        fit2, FE2, beta2, ife_res2 = _one_em_step(fit1, FE1, beta1)
+        niter += 1
+
+        # SQUAREM extrapolation
+        r_vec = fit1 - fit
+        v_vec = (fit2 - fit1) - r_vec
+        r_norm2 = float(xp.sum(r_vec ** 2))
+        v_norm2 = float(xp.sum(v_vec ** 2))
+
+        if v_norm2 > 1e-30:
+            alpha_sq = -max(1.0, r_norm2 / v_norm2) ** 0.5
+            # Candidate: fit0 - 2*alpha*r + alpha^2*v
+            fit_cand = fit - 2.0 * alpha_sq * r_vec + alpha_sq * alpha_sq * v_vec
+            # One EM "stabilization" step from candidate
+            fit3, FE3, beta3, ife_res3 = _one_em_step(fit_cand, FE2, beta2)
+            niter += 1
+            # Accept if objective improved (fit3 closer to data on observed cells)
+            res3 = float(xp.sum(I * (Y - fit3) ** 2))
+            res2 = float(xp.sum(I * (Y - fit2) ** 2))
+            if res3 <= res2:
+                fit, FE, beta, ife_res = fit3, FE3, beta3, ife_res3
+            else:
+                fit, FE, beta, ife_res = fit2, FE2, beta2, ife_res2
         else:
-            YY = _e_adj(Y, fit, I)
+            fit, FE, beta, ife_res = fit2, FE2, beta2, ife_res2
 
-        # M1: beta
-        beta = panel_beta(X, YY, FE, xxinv, W=WI if use_weight else None)
-        cf = covar_fit(X, beta)
-
-        # M2: FE
-        if use_weight:
-            U = _we_adj(YY - cf, FE, W, I)
-        else:
-            U = _e_adj(YY - cf, FE, I)
-        ife_res = ife(U, force, mc=False, r=0)
-        FE = ife_res.FE
-        fit = cf + FE
-
-        # Convergence
         dif = _frob_ratio(fit, fit_old, W=WI if use_weight else None)
         if dif < tol:
             converged = True
             break
+
+    if ife_res is None:
+        # Edge case: max_iter=0
+        _, _, _, ife_res = _one_em_step(fit, FE, beta)
 
     residuals = _fe_adj(Y - fit, I)
     obs = float(xp.sum(I))
@@ -367,6 +407,20 @@ def _em_fe_inter_covar(Y, Y0, X, I, W, WI, use_weight, beta, xxinv, force, r, to
     burn_in_done = False
     niter_total = 0
 
+    def _one_step(fit_in, FE_in, beta_in, r_cur):
+        if use_weight:
+            YY = _we_adj(Y, fit_in, W, I)
+        else:
+            YY = _e_adj(Y, fit_in, I)
+        b = panel_beta(X, YY, FE_in, xxinv, W=WI if use_weight else None)
+        c = covar_fit(X, b)
+        if use_weight:
+            U = _we_adj(YY - c, FE_in, W, I)
+        else:
+            U = _e_adj(YY - c, FE_in, I)
+        ires = ife(U, force, mc=False, r=r_cur)
+        return c + ires.FE, ires.FE, b, ires
+
     for phase in range(2):
         if phase == 0 and not use_weight:
             continue
@@ -375,46 +429,68 @@ def _em_fe_inter_covar(Y, Y0, X, I, W, WI, use_weight, beta, xxinv, force, r, to
         cf_current = cf.copy()
         FE_current = FE.copy()
         beta_current = beta.copy()
+        ife_res = None
 
-        for niter in range(1, max_iter + 1):
+        niter = 0
+        while niter < max_iter:
             fit_old = fit_current.copy()
-
-            # E-step
-            if use_weight:
-                YY = _we_adj(Y, fit_current, W, I)
-            else:
-                YY = _e_adj(Y, fit_current, I)
-
-            # M1: beta
-            beta_current = panel_beta(X, YY, FE_current, xxinv,
-                                       W=WI if use_weight else None)
-            cf_current = covar_fit(X, beta_current)
-
-            # M2: FE (additive + interactive)
             r_current = max(r, d - niter) if phase == 0 else r
-            if use_weight:
-                U = _we_adj(YY - cf_current, FE_current, W, I)
-            else:
-                U = _e_adj(YY - cf_current, FE_current, I)
-            ife_res = ife(U, force, mc=False, r=r_current)
-            FE_current = ife_res.FE
-            fit_current = cf_current + FE_current
 
-            dif = _frob_ratio(fit_current, fit_old, W=WI if use_weight else None)
+            # Step 1
+            fit1, FE1, beta1, ires1 = _one_step(fit_current, FE_current, beta_current, r_current)
+            niter += 1
             niter_total += 1
 
+            dif = _frob_ratio(fit1, fit_old, W=WI if use_weight else None)
+            if dif < tol:
+                fit_current, FE_current, beta_current, ife_res = fit1, FE1, beta1, ires1
+                if phase == 0:
+                    burn_in_done = True
+                else:
+                    converged = True
+                break
+
+            # Step 2
+            fit2, FE2, beta2, ires2 = _one_step(fit1, FE1, beta1, r_current)
+            niter += 1
+            niter_total += 1
+
+            # SQUAREM extrapolation
+            r_vec = fit1 - fit_current
+            v_vec = (fit2 - fit1) - r_vec
+            r_n2 = float(xp.sum(r_vec ** 2))
+            v_n2 = float(xp.sum(v_vec ** 2))
+
+            if v_n2 > 1e-30:
+                alpha_sq = -max(1.0, r_n2 / v_n2) ** 0.5
+                fit_cand = fit_current - 2.0 * alpha_sq * r_vec + alpha_sq * alpha_sq * v_vec
+                fit3, FE3, beta3, ires3 = _one_step(fit_cand, FE2, beta2, r_current)
+                niter += 1
+                niter_total += 1
+                res3 = float(xp.sum(I * (Y - fit3) ** 2))
+                res2 = float(xp.sum(I * (Y - fit2) ** 2))
+                if res3 <= res2:
+                    fit_current, FE_current, beta_current, ife_res = fit3, FE3, beta3, ires3
+                else:
+                    fit_current, FE_current, beta_current, ife_res = fit2, FE2, beta2, ires2
+            else:
+                fit_current, FE_current, beta_current, ife_res = fit2, FE2, beta2, ires2
+
+            dif = _frob_ratio(fit_current, fit_old, W=WI if use_weight else None)
             if dif < tol:
                 if phase == 0:
                     burn_in_done = True
-                    break
                 else:
                     converged = True
-                    break
+                break
 
         beta = beta_current
-        cf = cf_current
+        cf = cf_current if ife_res is None else covar_fit(X, beta_current)
         FE = FE_current
         fit = fit_current
+
+    if ife_res is None:
+        _, _, _, ife_res = _one_step(fit, FE, beta, r)
 
     residuals = _fe_adj(Y - fit, I)
     obs = float(xp.sum(I))
@@ -452,7 +528,7 @@ def estimate_mc(
     lam: float,
     force: int,
     tol: float = 1e-5,
-    max_iter: int = 1000,
+    max_iter: int = 5000,
 ) -> EstimationResult:
     """Matrix completion estimator via nuclear norm penalization.
 
@@ -496,33 +572,65 @@ def estimate_mc(
     FE = fit - cf
     converged = False
 
-    for niter in range(1, max_iter + 1):
+    def _one_mc_step(fit_in, FE_in, beta_in, cf_in):
+        if use_weight:
+            YY = _we_adj(Y, fit_in, W, I)
+        else:
+            YY = _e_adj(Y, fit_in, I)
+        b, c = beta_in, cf_in
+        if has_covar:
+            b = panel_beta(X, YY, FE_in, xxinv, W=WI if use_weight else None)
+            c = covar_fit(X, b)
+        if use_weight:
+            U = _we_adj(YY - c, FE_in, W, I)
+        else:
+            U = _e_adj(YY - c, FE_in, I)
+        ires = ife(U, force, mc=True, r=1, hard=False, lam=lam)
+        return c + ires.FE, ires.FE, b, c, ires
+
+    # SQUAREM-accelerated EM
+    niter = 0
+    ife_res = None
+    while niter < max_iter:
         fit_old = fit.copy()
 
-        # E-step
-        if use_weight:
-            YY = _we_adj(Y, fit, W, I)
-        else:
-            YY = _e_adj(Y, fit, I)
+        fit1, FE1, beta1, cf1, ires1 = _one_mc_step(fit, FE, beta, cf)
+        niter += 1
+        dif = _frob_ratio(fit1, fit_old, W=WI if use_weight else None)
+        if dif < tol:
+            fit, FE, beta, cf, ife_res = fit1, FE1, beta1, cf1, ires1
+            converged = True
+            break
 
-        # M1: beta (if covariates)
-        if has_covar:
-            beta = panel_beta(X, YY, FE, xxinv, W=WI if use_weight else None)
-            cf = covar_fit(X, beta)
+        fit2, FE2, beta2, cf2, ires2 = _one_mc_step(fit1, FE1, beta1, cf1)
+        niter += 1
 
-        # M2: FE (additive + nuclear norm penalized interactive)
-        if use_weight:
-            U = _we_adj(YY - cf, FE, W, I)
+        r_vec = fit1 - fit
+        v_vec = (fit2 - fit1) - r_vec
+        r_n2 = float(xp.sum(r_vec ** 2))
+        v_n2 = float(xp.sum(v_vec ** 2))
+
+        if v_n2 > 1e-30:
+            alpha_sq = -max(1.0, r_n2 / v_n2) ** 0.5
+            fit_cand = fit - 2.0 * alpha_sq * r_vec + alpha_sq * alpha_sq * v_vec
+            fit3, FE3, beta3, cf3, ires3 = _one_mc_step(fit_cand, FE2, beta2, cf2)
+            niter += 1
+            res3 = float(xp.sum(I * (Y - fit3) ** 2))
+            res2 = float(xp.sum(I * (Y - fit2) ** 2))
+            if res3 <= res2:
+                fit, FE, beta, cf, ife_res = fit3, FE3, beta3, cf3, ires3
+            else:
+                fit, FE, beta, cf, ife_res = fit2, FE2, beta2, cf2, ires2
         else:
-            U = _e_adj(YY - cf, FE, I)
-        ife_res = ife(U, force, mc=True, r=1, hard=False, lam=lam)
-        FE = ife_res.FE
-        fit = cf + FE
+            fit, FE, beta, cf, ife_res = fit2, FE2, beta2, cf2, ires2
 
         dif = _frob_ratio(fit, fit_old, W=WI if use_weight else None)
         if dif < tol:
             converged = True
             break
+
+    if ife_res is None:
+        _, _, _, _, ife_res = _one_mc_step(fit, FE, beta, cf)
 
     residuals = _fe_adj(Y - fit, I)
     obs = float(xp.sum(I))
@@ -555,7 +663,7 @@ def estimate_cfe(
     gamma_groups: np.ndarray | None = None,  # (T,) group assignments for gamma
     kappa_groups: np.ndarray | None = None,  # (N,) group assignments for kappa
     tol: float = 1e-5,
-    max_iter: int = 1000,
+    max_iter: int = 5000,
 ) -> EstimationResult:
     """Complex fixed effects estimator with Z*gamma_t and kappa_i*Q.
 

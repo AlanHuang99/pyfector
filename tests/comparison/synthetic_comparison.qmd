@@ -1,0 +1,362 @@
+---
+title: "Synthetic Panel: R fect vs Python pyfect"
+author: "Alan Huang"
+date: "2026"
+format:
+  html:
+    page-layout: full
+    df-print: paged
+    embed-resources: true
+    toc: true
+    toc-location: left
+    toc-expand: 2
+    code-fold: true
+execute:
+  cache: false
+  error: true
+  warning: false
+jupyter: python3
+---
+
+```{=html}
+<style>
+.main-container { max-width: 95% !important; margin: auto; }
+table { font-size: 13px; border-collapse: collapse; width: 100%; }
+th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid #ddd; }
+th:first-child, td:first-child { text-align: left; }
+th { background: #f5f5f5; font-weight: bold; }
+tr:hover { background: #f9f9f9; }
+</style>
+```
+
+This document generates synthetic panel data with known DGP parameters,
+estimates FE / IFE / MC in **both R fect and Python pyfect** (1000 bootstrap),
+and compares ATT, betas, SEs, and p-values side by side.
+
+Two scenarios: (A) balanced panel, (B) 5 % randomly dropped observations.
+
+**DGP**: 500 units, 12 periods, 40% eventually treated (staggered),
+true ATT = 1.5, 3 covariates, 1 interactive factor, two-way FE.
+
+# 1 -- Generate Data & Run R fect
+
+Data is generated in R; R fect estimates are run there and exported to JSON.
+
+```{python}
+#| label: r-run
+#| cache: false
+
+import subprocess, json, textwrap
+
+r_script = textwrap.dedent(r"""
+library(fect)
+library(jsonlite)
+
+set.seed(42)
+
+# ---- DGP parameters ----
+N <- 500; TT <- 12; treat_frac <- 0.40
+true_att <- 1.5; n_cov <- 3; beta_true <- c(0.8, -0.5, 0.3)
+
+alpha_i <- rnorm(N, 0, 1)
+xi_t    <- seq(-1, 1, length.out = TT)
+factor_t  <- sin(2 * pi * (1:TT) / TT)
+loading_i <- rnorm(N, 0, 0.5)
+X_array <- array(rnorm(TT * N * n_cov), dim = c(TT, N, n_cov))
+
+n_tr <- round(N * treat_frac)
+treat_start <- sample(4:TT, n_tr, replace = TRUE)
+D_mat <- matrix(0L, TT, N)
+for (j in seq_len(n_tr)) D_mat[treat_start[j]:TT, j] <- 1L
+
+eps <- matrix(rnorm(TT * N, 0, 0.5), TT, N)
+Y_mat <- matrix(0, TT, N)
+for (t in 1:TT) for (j in 1:N) {
+  Y_mat[t, j] <- alpha_i[j] + xi_t[t] + factor_t[t] * loading_i[j] +
+                  sum(X_array[t, j, ] * beta_true) + D_mat[t, j] * true_att + eps[t, j]
+}
+
+rows <- expand.grid(time = 1:TT, id = 1:N)
+rows$Y <- as.vector(Y_mat); rows$D <- as.vector(D_mat)
+rows$X1 <- as.vector(X_array[,,1]); rows$X2 <- as.vector(X_array[,,2])
+rows$X3 <- as.vector(X_array[,,3])
+df_full <- rows
+
+set.seed(42)
+drop_idx <- sort(sample(nrow(df_full), round(0.05 * nrow(df_full))))
+df_drop  <- df_full[-drop_idx, ]
+
+write.csv(df_full, "/tmp/synth_panel_full.csv", row.names = FALSE)
+write.csv(df_drop, "/tmp/synth_panel_drop5.csv", row.names = FALSE)
+
+cat(sprintf("Full: %d obs | Dropped: %d obs\n", nrow(df_full), nrow(df_drop)))
+
+# ---- Estimate ----
+run_fect <- function(df, nboots = 1000) {
+  results <- list()
+  for (meth in c("fe", "ife", "mc")) {
+    cat(sprintf("  %s ... ", toupper(meth)))
+    extra <- list()
+    if (meth == "ife") extra <- list(r = c(0, 5), CV = TRUE)
+    if (meth == "mc")  extra <- list(CV = TRUE)
+    t0 <- proc.time()
+    out <- do.call(fect, c(list(
+      formula = Y ~ D + X1 + X2 + X3, data = df,
+      index = c("id", "time"), force = "two-way", method = meth,
+      se = TRUE, nboots = nboots, seed = 123,
+      parallel = TRUE, cores = 16
+    ), extra))
+    elapsed <- (proc.time() - t0)["elapsed"]
+    att <- out$est.avg[, "ATT.avg"]; se_ <- out$est.avg[, "S.E."]
+    pv  <- out$est.avg[, "p.value"]
+    beta_vals <- if (!is.null(out$beta)) as.list(setNames(as.numeric(out$beta), rownames(out$beta))) else list()
+    r_cv <- if (!is.null(out$r.cv)) out$r.cv else NA
+    lm_cv <- if (!is.null(out$lambda.cv)) out$lambda.cv else NA
+    results[[meth]] <- list(method=meth, att=att, se=se_, p=pv,
+                            beta=beta_vals, r_cv=r_cv, lambda_cv=lm_cv)
+    sig <- ifelse(pv<0.01,"***",ifelse(pv<0.05,"**",ifelse(pv<0.1,"*","")))
+    cat(sprintf("ATT=%7.4f SE=%7.4f p=%.4f%s (%.0fs)\n", att, se_, pv, sig, elapsed))
+  }
+  results
+}
+
+cat("\n=== Full Panel ===\n")
+r_full <- run_fect(df_full)
+cat("\n=== 5% Dropped ===\n")
+r_drop <- run_fect(df_drop)
+
+export <- list()
+for (sc in c("full","drop")) {
+  rr <- if (sc=="full") r_full else r_drop
+  for (m in names(rr)) {
+    e <- rr[[m]]
+    export[[length(export)+1]] <- list(scenario=sc, method=e$method,
+      att=e$att, se=e$se, p=e$p, beta=e$beta, r_cv=e$r_cv, lambda_cv=e$lambda_cv)
+  }
+}
+write_json(export, "/tmp/synth_r_results.json", auto_unbox=TRUE)
+cat("\nDone.\n")
+""")
+
+import os
+env = os.environ.copy()
+result = subprocess.run(
+    ["Rscript", "--vanilla", "-e", r_script],
+    capture_output=True, text=True, timeout=1800, env=env,
+)
+print(result.stdout)
+if result.returncode != 0:
+    print("STDERR:", result.stderr[-2000:])
+```
+
+# 2 -- Python pyfect Estimation
+
+```{python}
+#| label: py-estimate
+#| cache: false
+
+import json, time
+import numpy as np
+import polars as pl
+import pyfect
+from IPython.display import display, HTML
+
+np.random.seed(123)
+
+df_full = pl.read_csv("/tmp/synth_panel_full.csv")
+df_drop = pl.read_csv("/tmp/synth_panel_drop5.csv")
+
+with open("/tmp/synth_r_results.json") as f:
+    r_res = {(e["scenario"], e["method"]): e for e in json.load(f)}
+
+covariates = ["X1", "X2", "X3"]
+py_res = {}
+
+for scenario, df in [("full", df_full), ("drop", df_drop)]:
+    label = "Full Panel" if scenario == "full" else "5% Dropped"
+    print(f"\n{'='*60}")
+    print(f"  {label}  ({len(df)} obs)")
+    print(f"{'='*60}")
+
+    for mname, mkwargs in [
+        ("fe",  dict(method="fe",  force="two-way")),
+        ("ife", dict(method="ife", force="two-way", CV=True, r=(0, 5))),
+        ("mc",  dict(method="mc",  force="two-way", CV=True)),
+    ]:
+        t0 = time.time()
+        result = pyfect.fect(
+            data=df, Y="Y", D="D",
+            index=("id", "time"), X=covariates,
+            se=True, nboots=1000, n_jobs=16, seed=123,
+            **mkwargs,
+        )
+        elapsed = time.time() - t0
+        py_res[(scenario, mname)] = result
+        inf = result.inference
+        sig = "***" if inf.att_avg_pval < 0.01 else "**" if inf.att_avg_pval < 0.05 else "*" if inf.att_avg_pval < 0.1 else ""
+        extra = ""
+        if mname == "ife" and hasattr(result, "r_cv"):
+            extra = f"  r_cv={result.r_cv}"
+        if mname == "mc" and result.lambda_cv is not None:
+            extra = f"  lam={result.lambda_cv:.6f}"
+        print(f"  {mname.upper():4s}  ATT={result.att_avg:8.4f}  SE={inf.att_avg_se:8.4f}  "
+              f"p={inf.att_avg_pval:.4f}{sig}{extra}  ({elapsed:.1f}s)")
+```
+
+# 3 -- Side-by-Side Comparison
+
+## ATT & Inference
+
+```{python}
+#| label: compare-att
+
+TRUE_ATT = 1.5
+
+rows = []
+for scenario in ["full", "drop"]:
+    for mname in ["fe", "ife", "mc"]:
+        r = r_res.get((scenario, mname))
+        py = py_res.get((scenario, mname))
+        if not r or py is None:
+            continue
+        r_att, r_se, r_p = r["att"], r["se"], r["p"]
+        py_att = py.att_avg
+        py_se = py.inference.att_avg_se
+        py_p = py.inference.att_avg_pval
+        att_pct = abs(py_att - r_att) / max(abs(r_att), 1e-8) * 100
+        def sig(p):
+            if p < 0.01: return "***"
+            if p < 0.05: return "**"
+            if p < 0.1:  return "*"
+            return ""
+        rows.append({
+            "Scenario": "Balanced" if scenario == "full" else "5% Drop",
+            "Method": mname.upper(),
+            "True": f"{TRUE_ATT:.1f}",
+            "R ATT": f"{r_att:.4f}", "R SE": f"{r_se:.4f}",
+            "R p": f"{r_p:.4f}{sig(r_p)}",
+            "Py ATT": f"{py_att:.4f}", "Py SE": f"{py_se:.4f}",
+            "Py p": f"{py_p:.4f}{sig(py_p)}",
+            "% diff": f"{att_pct:.1f}%",
+            "Sig": "Y" if sig(r_p) == sig(py_p) else "N",
+        })
+
+display(HTML(pl.DataFrame(rows).to_pandas().to_html(index=False)))
+```
+
+## Covariate Coefficients
+
+```{python}
+#| label: compare-betas
+
+TRUE_BETA = {"X1": 0.8, "X2": -0.5, "X3": 0.3}
+rows = []
+for scenario in ["full", "drop"]:
+    for mname in ["fe", "ife", "mc"]:
+        r = r_res.get((scenario, mname))
+        py = py_res.get((scenario, mname))
+        if not r or py is None: continue
+        r_beta_raw = r.get("beta", {})
+        # Handle both dict {"X1": 0.8} and list [0.8, -0.5, 0.3] formats
+        if isinstance(r_beta_raw, list):
+            r_beta = dict(zip(covariates, r_beta_raw))
+        else:
+            r_beta = r_beta_raw
+        py_beta = dict(zip(py.covariate_names, py.beta)) if py.beta is not None else {}
+        for cov in covariates:
+            r_b, py_b = r_beta.get(cov), py_beta.get(cov)
+            if r_b is None or py_b is None: continue
+            rows.append({
+                "Scenario": "Balanced" if scenario == "full" else "5% Drop",
+                "Method": mname.upper(), "Cov": cov,
+                "True": f"{TRUE_BETA[cov]:.1f}",
+                "R": f"{r_b:.4f}", "Py": f"{py_b:.4f}",
+                "|diff|": f"{abs(py_b - r_b):.4f}",
+            })
+display(HTML(pl.DataFrame(rows).to_pandas().to_html(index=False)))
+```
+
+## CV Selection
+
+```{python}
+#| label: compare-cv
+
+rows = []
+for scenario in ["full", "drop"]:
+    label = "Balanced" if scenario == "full" else "5% Drop"
+    for mname, param in [("ife", "r"), ("mc", "lambda")]:
+        r = r_res.get((scenario, mname))
+        py = py_res.get((scenario, mname))
+        if not r or py is None: continue
+        r_val = r.get("r_cv") if param == "r" else r.get("lambda_cv")
+        py_val = getattr(py, "r_cv", None) if param == "r" else getattr(py, "lambda_cv", None)
+        r_str = f"{r_val:.6f}" if isinstance(r_val, float) else str(r_val)
+        py_str = f"{py_val:.6f}" if isinstance(py_val, float) else str(py_val)
+        rows.append({"Scenario": label, "Method": mname.upper(), "Param": param,
+                      "R": r_str, "Python": py_str})
+display(HTML(pl.DataFrame(rows).to_pandas().to_html(index=False)))
+```
+
+# 4 -- Event Study Plots
+
+```{python}
+#| label: event-study
+#| fig-width: 18
+#| fig-height: 14
+
+import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+method_labels = {"fe": "FE", "ife": "IFE", "mc": "MC"}
+
+for row_idx, (scenario, slab) in enumerate([("full", "Balanced"), ("drop", "5% Dropped")]):
+    for col_idx, mname in enumerate(["fe", "ife", "mc"]):
+        ax = axes[row_idx, col_idx]
+        res = py_res.get((scenario, mname))
+        if res is None:
+            ax.text(0.5, 0.5, "N/A", ha="center", va="center")
+            continue
+        time_on = res.time_on; att_on = res.att_on
+        ci = res.inference.att_on_ci if res.inference and res.inference.att_on_ci is not None else None
+        ax.axhline(0, color="gray", ls="--", lw=0.8)
+        ax.axhline(1.5, color="red", ls=":", lw=1, alpha=0.6, label="True ATT=1.5")
+        ax.axvline(-0.5, color="gray", ls=":", lw=0.8, alpha=0.5)
+        if ci is not None:
+            ax.fill_between(time_on, ci[:, 0], ci[:, 1], alpha=0.15, color="steelblue")
+        ax.plot(time_on, att_on, color="steelblue", lw=1.5)
+        if row_idx == 0: ax.set_title(f"{method_labels[mname]}", fontsize=14, fontweight="bold")
+        if col_idx == 0: ax.set_ylabel(slab, fontsize=12, fontweight="bold")
+        ax.set_xlabel("Periods Rel. to Treatment" if row_idx == 1 else "")
+        ax.tick_params(labelsize=9); ax.legend(fontsize=8, loc="upper left")
+
+plt.suptitle("Dynamic Treatment Effects (pyfect) -- True ATT = 1.5",
+             fontsize=16, fontweight="bold", y=1.01)
+plt.tight_layout(); plt.show()
+```
+
+# 5 -- Summary
+
+```{python}
+#| label: summary
+import sys
+print(f"True ATT  : 1.5")
+print(f"True beta : X1=0.8, X2=-0.5, X3=0.3\n")
+for scenario, slab in [("full", "Balanced"), ("drop", "5% Dropped")]:
+    n_total = n_sig = n_close = 0
+    for mname in ["fe", "ife", "mc"]:
+        r = r_res.get((scenario, mname)); py = py_res.get((scenario, mname))
+        if not r or py is None: continue
+        n_total += 1
+        def sig(p):
+            if p < 0.01: return "***"
+            if p < 0.05: return "**"
+            if p < 0.1:  return "*"
+            return ""
+        if sig(r["p"]) == sig(py.inference.att_avg_pval): n_sig += 1
+        if abs(r["att"]) > 0.01 and abs(py.att_avg - r["att"]) / abs(r["att"]) < 0.10: n_close += 1
+    print(f"--- {slab} ---")
+    print(f"  Models compared      : {n_total}")
+    print(f"  Significance match   : {n_sig}/{n_total}")
+    print(f"  ATT within 10% of R  : {n_close}/{n_total}\n")
+print(f"Python: {sys.version.split()[0]} | pyfect: {pyfect.__version__} | numpy: {np.__version__}")
+```

@@ -177,10 +177,10 @@ def fect(
     vartype: Literal["bootstrap", "jackknife"] = "bootstrap",
     nboots: int = 200,
     alpha: float = 0.05,
-    tol: float = 1e-5,
-    max_iter: int = 1000,
+    tol: float = 1e-7,
+    max_iter: int = 5000,
     min_T0: int = 1,
-    max_missing: float = 0.5,
+    max_missing: float = 1.0,
     normalize: bool = False,
     # CFE-specific
     Z: list[str] | None = None,
