@@ -1,6 +1,6 @@
 # pyfect
 
-> **Alpha release** -- this package is under active development. APIs may change. Bug reports and feature requests are welcome via [GitHub Issues](https://github.com/AlanHuang99/pyfect/issues).
+> **Alpha (v0.1.x)** -- This package is in early development. Results have been validated against R fect on synthetic data, but edge cases may remain. **APIs are not stable and may change without notice.** Please verify critical results independently. Bug reports, feature requests, and contributions are welcome via [GitHub Issues](https://github.com/AlanHuang99/pyfect/issues).
 
 Fast counterfactual estimators for panel data in Python.
 
