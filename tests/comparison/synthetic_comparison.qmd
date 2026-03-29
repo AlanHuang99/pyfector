@@ -339,7 +339,106 @@ plt.suptitle("Dynamic Treatment Effects (pyfect) -- True ATT = 1.5",
 plt.tight_layout(); plt.show()
 ```
 
-# 5 -- Summary
+# 5 -- Diagnostic Tests
+
+```{python}
+#| label: diagnostics
+
+for scenario, slab in [("full", "Balanced"), ("drop", "5% Dropped")]:
+    print(f"\n{'='*60}")
+    print(f"  {slab}")
+    print(f"{'='*60}")
+    for mname in ["fe", "ife", "mc"]:
+        res = py_res.get((scenario, mname))
+        if res is None or res.inference is None:
+            continue
+        diag = res.diagnose(
+            f_threshold=0.5,
+            tost_threshold=0.36,
+            placebo_period=(-3, -1),
+            loo=True,
+        )
+        print(f"\n--- {mname.upper()} ---")
+        print(diag.summary())
+```
+
+# 6 -- Built-in Plots
+
+## Gap Plots (Event Study via pyfect.plot)
+
+```{python}
+#| label: gap-plots
+#| fig-width: 18
+#| fig-height: 10
+
+import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+method_labels = {"fe": "FE", "ife": "IFE", "mc": "MC"}
+
+for row_idx, (scenario, slab) in enumerate([("full", "Balanced"), ("drop", "5% Dropped")]):
+    for col_idx, mname in enumerate(["fe", "ife", "mc"]):
+        ax = axes[row_idx, col_idx]
+        res = py_res.get((scenario, mname))
+        if res is None:
+            ax.text(0.5, 0.5, "N/A", ha="center", va="center")
+            continue
+        res.plot(kind="gap", ax=ax, show_ci=True)
+        ax.axhline(1.5, color="red", ls=":", lw=1, alpha=0.6, label="True ATT")
+        if row_idx == 0:
+            ax.set_title(f"{method_labels[mname]}", fontsize=14, fontweight="bold")
+        if col_idx == 0:
+            ax.set_ylabel(slab, fontsize=12, fontweight="bold")
+        ax.legend(fontsize=8, loc="upper left")
+
+plt.suptitle("Gap Plots (pyfect built-in) -- True ATT = 1.5",
+             fontsize=16, fontweight="bold", y=1.01)
+plt.tight_layout(); plt.show()
+```
+
+## Equivalence Plots (TOST)
+
+```{python}
+#| label: equiv-plots
+#| fig-width: 18
+#| fig-height: 10
+
+fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+
+for row_idx, (scenario, slab) in enumerate([("full", "Balanced"), ("drop", "5% Dropped")]):
+    for col_idx, mname in enumerate(["fe", "ife", "mc"]):
+        ax = axes[row_idx, col_idx]
+        res = py_res.get((scenario, mname))
+        if res is None:
+            ax.text(0.5, 0.5, "N/A", ha="center", va="center")
+            continue
+        res.plot(kind="equiv", ax=ax, threshold=0.36)
+        if row_idx == 0:
+            ax.set_title(f"{method_labels[mname]}", fontsize=14, fontweight="bold")
+        if col_idx == 0:
+            ax.set_ylabel(slab, fontsize=12, fontweight="bold")
+
+plt.suptitle("Pre-treatment Equivalence (TOST bounds = 0.36)",
+             fontsize=16, fontweight="bold", y=1.01)
+plt.tight_layout(); plt.show()
+```
+
+## Treatment Status Heatmap (FE, Balanced)
+
+```{python}
+#| label: status-plot
+#| fig-width: 14
+#| fig-height: 6
+
+fig, ax = plt.subplots(1, 1, figsize=(14, 6))
+res = py_res.get(("full", "fe"))
+if res is not None:
+    res.plot(kind="status", ax=ax)
+    ax.set_title("Treatment Status Heatmap (Balanced, FE)", fontsize=14, fontweight="bold")
+plt.tight_layout(); plt.show()
+```
+
+# 7 -- Summary
 
 ```{python}
 #| label: summary
