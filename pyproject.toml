@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "pyfect"
+name = "fectpy"
 version = "0.1.0"
 description = "Fast counterfactual estimators for panel data — Python reimplementation of R fect"
 readme = "README.md"

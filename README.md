@@ -9,13 +9,15 @@ A high-performance reimplementation of the R [fect](https://github.com/xuyiqing/
 ## Installation
 
 ```bash
-pip install pyfect
+pip install fectpy
 ```
 
 For GPU support:
 ```bash
-pip install pyfect[gpu]
+pip install fectpy[gpu]
 ```
+
+> **Note**: The PyPI package is `fectpy`, but the import name is `pyfect` — i.e. `import pyfect`.
 
 ## Quick Start
 
