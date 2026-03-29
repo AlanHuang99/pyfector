@@ -396,7 +396,7 @@ def _compute_effects(eff, D, T_on, I):
 
     att_avg = float(np.sum(eff[treated]) / max(n_treated, 1))
 
-    # Per-unit ATT
+    # Per-unit ATT (post-treatment only)
     N = eff.shape[1]
     unit_atts = []
     for j in range(N):
@@ -405,9 +405,13 @@ def _compute_effects(eff, D, T_on, I):
             unit_atts.append(float(np.mean(eff[mask_j, j])))
     att_avg_unit = float(np.mean(unit_atts)) if unit_atts else 0.0
 
-    # Dynamic ATT by relative time
-    T_on_flat = T_on[treated].ravel()
-    eff_flat = eff[treated].ravel()
+    # Dynamic ATT by relative time — include pre-treatment periods
+    # for ever-treated units (counterfactual gaps before treatment onset)
+    ever_treated = np.any(D > 0, axis=0)  # units that are ever treated
+    all_periods = (I > 0) & ever_treated[np.newaxis, :]  # all observed periods
+
+    T_on_flat = T_on[all_periods].ravel()
+    eff_flat = eff[all_periods].ravel()
     valid = ~np.isnan(T_on_flat)
     T_on_flat = T_on_flat[valid]
     eff_flat = eff_flat[valid]

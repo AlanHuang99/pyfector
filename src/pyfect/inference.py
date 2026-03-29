@@ -305,9 +305,13 @@ def _compute_att(
     else:
         att_avg = float(np.sum(eff[treated_mask]) / n_treated)
 
-    # Dynamic ATT by relative time
-    T_on_flat = T_on[treated_mask].ravel()
-    eff_flat = eff[treated_mask].ravel()
+    # Dynamic ATT by relative time — use all periods of ever-treated units
+    ever_treated = np.any(D > 0, axis=0)
+    all_periods = ever_treated[np.newaxis, :]  # broadcast (1, N) → (T, N)
+    # Use np.broadcast_to to avoid shape mismatch, then flatten
+    all_mask = np.broadcast_to(all_periods, T_on.shape)
+    T_on_flat = T_on[all_mask].ravel()
+    eff_flat = eff[all_mask].ravel()
 
     if time_on is None:
         time_on = np.sort(np.unique(T_on_flat[~np.isnan(T_on_flat)]))
