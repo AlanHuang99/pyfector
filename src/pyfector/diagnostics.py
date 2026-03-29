@@ -127,20 +127,25 @@ def run_diagnostics(
 
         n_boot = boot_pre.shape[1]
         try:
-            S_inv = np.linalg.inv(S)
+            cond = np.linalg.cond(S)
+            if cond > 1e12:
+                S_inv = np.linalg.pinv(S)
+            else:
+                S_inv = np.linalg.inv(S)
             F_stat = float(att_pre @ S_inv @ att_pre)
             scale = (n_boot - k) / ((n_boot - 1) * k)
             F_stat_scaled = F_stat * scale
 
-            diag.f_stat = F_stat_scaled
-            diag.f_df1 = k
-            diag.f_df2 = n_boot - k
-            diag.f_pval = float(1 - stats.f.cdf(F_stat_scaled, k, n_boot - k))
+            if np.isfinite(F_stat_scaled) and F_stat_scaled >= 0:
+                diag.f_stat = F_stat_scaled
+                diag.f_df1 = k
+                diag.f_df2 = n_boot - k
+                diag.f_pval = float(1 - stats.f.cdf(F_stat_scaled, k, n_boot - k))
 
-            # Equivalence F-test (non-central F)
-            ncp = n_boot * f_threshold
-            diag.equiv_f_pval = float(stats.ncf.cdf(F_stat_scaled, k, n_boot - k, ncp))
-            diag.equiv_threshold = f_threshold
+                # Equivalence F-test (non-central F)
+                ncp = n_boot * f_threshold
+                diag.equiv_f_pval = float(stats.ncf.cdf(F_stat_scaled, k, n_boot - k, ncp))
+                diag.equiv_threshold = f_threshold
         except np.linalg.LinAlgError:
             pass
 
