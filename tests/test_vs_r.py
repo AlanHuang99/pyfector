@@ -37,8 +37,15 @@ pytestmark = pytest.mark.skipif(
 
 
 def _run_r_fect(csv_path, method, r, force, covariates=None,
-                se=False, nboots=200):
-    """Run R fect on a CSV file, return results as dict."""
+                se=False, nboots=200, tol=1e-5, max_iter=5000,
+                y_col="Y", d_col="D", index=("unit", "time")):
+    """Run R fect on a CSV file, return results as dict.
+
+    ``tol`` and ``max_iter`` are passed through to R fect so callers can
+    align tolerance with pyfector — R fect's default ``tol`` is loose
+    (1e-3) relative to pyfector's default 1e-7, which can make the two
+    converge to visibly different answers on ill-conditioned data.
+    """
     covar_str = ""
     if covariates:
         covar_str = " + " + " + ".join(covariates)
@@ -54,6 +61,7 @@ def _run_r_fect(csv_path, method, r, force, covariates=None,
         method_args = f'method="fe"'
 
     boot_args = f', nboots={nboots}' if se else ''
+    index_r = f'c("{index[0]}","{index[1]}")'
 
     r_script = f"""
 library(fect)
@@ -61,11 +69,13 @@ library(jsonlite)
 
 df <- read.csv("{csv_path}")
 
-out <- fect(Y ~ D{covar_str},
+out <- fect({y_col} ~ {d_col}{covar_str},
             data=df,
-            index=c("unit", "time"),
+            index={index_r},
             {method_args},
             force={force_str},
+            tol={tol},
+            max.iteration={max_iter},
             se={se_str}{boot_args})
 
 result <- list(
@@ -332,5 +342,59 @@ class TestBootstrapSEvsR:
 
             rel_diff = abs(py.att_avg - r_res["att_avg"]) / (abs(r_res["att_avg"]) + 1e-6)
             assert rel_diff < 0.15
+        finally:
+            os.unlink(csv_path)
+
+
+class TestMCvsR:
+    """Matrix completion comparison — uses tight tolerance on both sides.
+
+    R fect's default ``tol`` is 1e-3 which can stop the soft-impute
+    iteration well before convergence; pyfector uses 1e-7 by default.
+    To compare point estimates meaningfully we force both sides to the
+    same (tight) tolerance.
+    """
+
+    def test_mc_matches_at_tight_tol(self):
+        csv_path, df_pl, delta, _ = _make_shared_data(
+            N=100, T=30, r=2, p=0, delta=3.0, seed=2024,
+        )
+        try:
+            py = pyfector.fect(
+                data=df_pl, Y="Y", D="D", index=("unit", "time"),
+                method="mc", lam=0.01, CV=False, se=False,
+                tol=1e-7, max_iter=5000, seed=42,
+            )
+            r_res = _run_r_fect(
+                csv_path, method="mc", r=0.01, force="two-way",
+                tol=1e-7, max_iter=5000,
+            )
+            print(f"MC@tol=1e-7 — py={py.att_avg:.6f}, R={r_res['att_avg']:.6f}")
+            # At matched tolerance pyfector and R should agree to ~1e-3
+            # on synthetic data.
+            diff = abs(py.att_avg - r_res["att_avg"])
+            assert diff < 5e-3, f"MC mismatch at tol=1e-7: {diff:.2e}"
+        finally:
+            os.unlink(csv_path)
+
+    def test_mc_no_factors_matches_fe(self):
+        """With lam large enough to kill all singular values, MC should
+        collapse to plain FE."""
+        csv_path, df_pl, delta, _ = _make_shared_data(
+            N=80, T=25, r=0, p=0, delta=4.0, seed=3030,
+        )
+        try:
+            py_fe = pyfector.fect(
+                data=df_pl, Y="Y", D="D", index=("unit", "time"),
+                method="fe", force="two-way", seed=42,
+            )
+            py_mc = pyfector.fect(
+                data=df_pl, Y="Y", D="D", index=("unit", "time"),
+                method="mc", lam=1e6, CV=False, force="two-way",
+                tol=1e-7, seed=42,
+            )
+            diff = abs(py_fe.att_avg - py_mc.att_avg)
+            print(f"FE vs MC(lam=inf): {py_fe.att_avg:.6f} vs {py_mc.att_avg:.6f}")
+            assert diff < 1e-3
         finally:
             os.unlink(csv_path)
