@@ -1,13 +1,48 @@
 """
-EM iteration engines for FE, IFE, MC, and CFE estimators.
+EM iteration engines for the FE, IFE, MC, and CFE estimators.
 
-Each function takes panel matrices and iterates to convergence, returning
-fitted values, residuals, and estimated parameters.
+Each public ``estimate_*`` function takes panel matrices in the shape
+used by :mod:`pyfector.panel` and iterates an EM/SQUAREM loop to
+convergence, returning fitted values, residuals, and estimated
+parameters packed into an :class:`EstimationResult`.
 
-Key performance improvements over R fect:
-- Randomized truncated SVD (via linalg.panel_factor)
-- In-place array updates to reduce allocation
-- Warm-starting support (pass previous fit as Y0)
+Structure
+---------
+* :func:`estimate_ife` is the dispatch for the FE / IFE family.  It
+  picks one of four inner loops depending on whether covariates are
+  present and whether the target rank ``r`` is zero or positive:
+
+  - ``_em_fe_ad``              — additive FE only, no covariates
+  - ``_em_fe_inter``           — additive + interactive FE, no covariates
+  - ``_em_fe_ad_covar``        — additive FE + covariates
+  - ``_em_fe_inter_covar``     — full model: FE + interactive + covariates
+
+* :func:`estimate_mc` implements the matrix-completion estimator via
+  SQUAREM-accelerated soft singular-value thresholding.
+* :func:`estimate_cfe` implements the complex FE estimator with
+  ``Z * gamma_t`` and ``kappa_i * Q`` interaction terms.
+
+Correspondence with R fect
+--------------------------
+The inner loops reproduce the algorithms in R fect's
+``src/ife.cpp``, ``src/ife_sub.cpp`` and ``src/mc.cpp`` up to the exact
+order of operations.  In particular:
+
+* :func:`_em_fe_inter_covar` follows R fect's ``inter_fe_ub`` EM step
+  (two-block coordinate update of covariate coefficient ``beta`` and
+  interactive fixed effects) with an added SQUAREM acceleration step
+  (Varadhan & Roland 2008) that is mathematically equivalent at
+  convergence.
+* :func:`estimate_mc` follows R fect's ``inter_fe_mc`` with SQUAREM
+  added.  The soft-thresholded singular values are recovered through
+  :func:`pyfector.linalg.panel_FE`.
+* :func:`estimate_cfe` mirrors R fect's ``complex_fe_ub`` and cycles
+  over the ``beta``, ``gamma``, ``kappa``, additive-FE, and
+  interactive-FE blocks.
+
+The CV-selection logic for ``r`` (IFE) and ``lambda`` (MC) lives in
+:mod:`pyfector.cv` and is called before these routines by
+:func:`pyfector.fect`.
 """
 
 from __future__ import annotations
@@ -16,7 +51,7 @@ from typing import NamedTuple
 
 import numpy as np
 
-from .backend import get_backend
+from .backend import get_backend, to_numpy
 from .linalg import (
     ife,
     panel_beta,
@@ -53,15 +88,23 @@ def _fe_adj(FE, I):
 
 
 def _frob_ratio(new, old, W=None):
-    """Relative Frobenius norm change: ||new-old||_F / (||old||_F + 1e-10)."""
+    """Relative Frobenius norm change: ``||new - old||_F / ||old||_F``.
+
+    Computed via a single square root (``sqrt(diff2 / base2)``) to avoid
+    the double sqrt of earlier versions; the subtraction ``new - old``
+    is unavoidable but is done only once.  On GPU we compute the ratio
+    device-side and sync only the final scalar, which saves a host
+    round-trip per EM iteration.
+    """
     xp = get_backend()
+    delta = new - old
     if W is not None:
-        diff = xp.sqrt(xp.sum(W * (new - old) ** 2))
-        base = xp.sqrt(xp.sum(W * old ** 2)) + 1e-10
+        diff2 = xp.sum(W * delta * delta)
+        base2 = xp.sum(W * old * old) + 1e-20
     else:
-        diff = xp.linalg.norm(new - old, "fro")
-        base = xp.linalg.norm(old, "fro") + 1e-10
-    return float(diff / base)
+        diff2 = xp.sum(delta * delta)
+        base2 = xp.sum(old * old) + 1e-20
+    return float(xp.sqrt(diff2 / base2))
 
 
 # ---------------------------------------------------------------------------
@@ -117,12 +160,12 @@ def estimate_ife(
     else:
         WI = None
 
-    # Check covariate variation and remove invariant ones
+    # Check covariate variation and drop invariant ones.
+    # Vectorised over covariates: |X[:,:,k]|.sum() > tol.
     valid_x = []
     if has_covar:
-        for k in range(X.shape[2]):
-            if xp.sum(xp.abs(X[:, :, k])) > 1e-5:
-                valid_x.append(k)
+        col_sums = xp.abs(X).sum(axis=(0, 1))                       # (p,)
+        valid_x = list(np.flatnonzero(to_numpy(col_sums) > 1e-5))
         if valid_x:
             X = X[:, :, valid_x]
         else:

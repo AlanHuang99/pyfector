@@ -1,13 +1,27 @@
 """
-Diagnostic tests for pyfector results.
+Diagnostic tests on a fitted :class:`~pyfector.fect.FectResult`.
 
-Implements:
-- Pre-trend F-test (Wald-type joint significance)
-- Equivalence F-test (against non-central F)
-- TOST (two one-sided t-tests) for each pre-treatment period
-- Placebo test
-- Carryover test
-- Leave-one-period-out (LOO) test
+:func:`run_diagnostics` (also available as ``result.diagnose(...)``)
+runs several complementary checks on the pre-treatment portion of the
+event study and on the post-treatment fit.  Tests are implemented as in
+Liu, Wang & Xu (2024):
+
+* **Pre-trend F-test.** Wald-type joint significance of the
+  pre-treatment ATTs against zero; small p-values cast doubt on the
+  parallel-trends assumption.
+* **Equivalence F-test.** Non-central F-test for whether all
+  pre-treatment ATTs lie inside a user-supplied equivalence bound
+  (``f_threshold``); large p-values provide positive evidence *for* no
+  pre-trends.
+* **TOST** (two one-sided t-tests) on each individual pre-treatment
+  coefficient with bound ``tost_threshold``.
+* **Placebo test.** Refit on control cells only and evaluate the ATT on
+  a masked "placebo" window ``placebo_period``; a large placebo ATT
+  flags model misspecification.
+* **Carryover test.** Look for residual effect after treatment turns
+  off (reversal units only).
+* **Leave-one-out (LOO).** Drop each pre-treatment period in turn and
+  report the maximum change in overall ATT.
 """
 
 from __future__ import annotations

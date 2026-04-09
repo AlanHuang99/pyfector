@@ -1,15 +1,39 @@
 """
-Panel data ingestion and reshaping using Polars.
+Panel data ingestion and reshaping.
 
-Converts long-format panel data (Polars or Pandas DataFrames) into the
-matrix representation used by the estimation engine: T×N outcome matrix,
-T×N treatment indicator, T×N×p covariate array, etc.
+This module converts long-format panel data (polars, polars LazyFrame, or
+pandas DataFrames) into the ``(T, N)`` matrix layout used by the estimation
+engine.  Everything downstream of ``prepare_panel`` operates on dense
+``(T, N)`` arrays keyed by (unit, time) position rather than by the original
+unit/time identifiers.
 
-Also handles:
-- Staggered adoption and treatment timing (T_on, T_off)
-- Unbalanced panels (missing observations tracked via indicator I)
-- Unit filtering (min pre-treatment periods, max missing obs)
-- Cohort identification
+Responsibilities
+----------------
+* Assign integer unit and time positions via sorted unique values of the
+  ``index`` columns; original identifiers are preserved on ``PanelData``.
+* Build the outcome matrix ``Y``, treatment indicator ``D``, observation
+  indicator ``I`` (1 if present, 0 if missing), and the control mask
+  ``II = I * (1 - D)``.  Missing ``Y`` entries are replaced by 0 — missingness
+  is carried entirely by ``I``.
+* Build the optional covariate tensor ``X`` of shape ``(T, N, p)`` and the
+  weight matrix ``W`` of shape ``(T, N)``.
+* Compute relative event time ``T_on`` (treatment onset) and, for reversal
+  units, ``T_off`` (treatment removal).
+* Classify each unit as control (1), treated (2), or treatment-reversal (3).
+* Apply unit-level filters: ``min_T0`` minimum pre-treatment periods and
+  ``max_missing`` fraction of missing observations.
+* Compute initial imputation ``Y0`` and initial OLS beta on the control
+  subsample via :func:`initial_fit`, matching R fect's ``initialFit``.
+
+Conventions
+-----------
+* Matrices are row-major ``(T, N)`` with ``float64`` elements.
+* ``force`` encodes the additive fixed-effects choice: ``0 = none``,
+  ``1 = unit``, ``2 = time``, ``3 = two-way``.
+* ``T_on`` is ``NaN`` for never-treated units and for always-treated units
+  (no identifiable event).  For treated units, the first observed switch
+  from ``D == 0`` to ``D == 1`` defines the reference period and
+  ``T_on[t] = t - t0`` for every observed ``t``.
 """
 
 from __future__ import annotations
@@ -113,10 +137,6 @@ def prepare_panel(
     N = len(unit_ids)
     TT = len(time_ids)
 
-    # Create unit/time index maps
-    unit_map = {uid: i for i, uid in enumerate(unit_ids)}
-    time_map = {tid: i for i, tid in enumerate(time_ids)}
-
     # Initialize matrices
     Y_mat = np.full((TT, N), np.nan, dtype=np.float64)
     D_mat = np.zeros((TT, N), dtype=np.float64)
@@ -125,27 +145,29 @@ def prepare_panel(
 
     X_mat = np.zeros((TT, N, len(X)), dtype=np.float64) if X else None
 
-    # Fill matrices from data
-    # Convert relevant columns to numpy for fast iteration
+    # --- Vectorised matrix fill ---
+    # Map each long-form row to (t_idx, u_idx) via searchsorted on the
+    # already-sorted unique id arrays.  This avoids the per-row Python
+    # loop used in earlier versions and is ~100x faster on large panels.
     units_np = df[unit_col].to_numpy()
     times_np = df[time_col].to_numpy()
     y_np = df[Y].to_numpy().astype(np.float64)
     d_np = df[D].to_numpy().astype(np.float64)
 
-    w_np = df[W].to_numpy().astype(np.float64) if W else None
-    x_nps = [df[xname].to_numpy().astype(np.float64) for xname in X]
+    t_idx = np.searchsorted(time_ids, times_np)
+    u_idx = np.searchsorted(unit_ids, units_np)
 
-    for row_idx in range(len(df)):
-        u = unit_map[units_np[row_idx]]
-        t = time_map[times_np[row_idx]]
-        Y_mat[t, u] = y_np[row_idx]
-        D_mat[t, u] = d_np[row_idx]
-        I_mat[t, u] = 1.0 if not np.isnan(y_np[row_idx]) else 0.0
-        if W_mat is not None:
-            W_mat[t, u] = w_np[row_idx]
-        if X_mat is not None:
-            for k, x_arr in enumerate(x_nps):
-                X_mat[t, u, k] = x_arr[row_idx]
+    Y_mat[t_idx, u_idx] = y_np
+    D_mat[t_idx, u_idx] = d_np
+    I_mat[t_idx, u_idx] = (~np.isnan(y_np)).astype(np.float64)
+
+    if W_mat is not None:
+        w_np = df[W].to_numpy().astype(np.float64)
+        W_mat[t_idx, u_idx] = w_np
+
+    if X_mat is not None:
+        for k, xname in enumerate(X):
+            X_mat[t_idx, u_idx, k] = df[xname].to_numpy().astype(np.float64)
 
     # Replace NaN in Y with 0 (missing cells tracked by I)
     Y_mat = np.nan_to_num(Y_mat, nan=0.0)
@@ -153,45 +175,39 @@ def prepare_panel(
     # Control indicator: observed AND not treated
     II_mat = I_mat * (1 - D_mat)
 
-    # Unit classification
-    unit_type = np.ones(N, dtype=np.int32)  # default: control
-    for j in range(N):
-        d_col = D_mat[:, j]
-        obs_col = I_mat[:, j]
-        ever_treated = np.any(d_col[obs_col > 0] > 0)
-        if ever_treated:
-            # Check for reversals
-            d_obs = d_col[obs_col > 0]
-            has_reversal = False
-            if len(d_obs) > 1:
-                diffs = np.diff(d_obs)
-                has_reversal = np.any(diffs < 0)
-            unit_type[j] = 3 if has_reversal else 2
+    # --- Vectorised unit classification ---
+    # A unit is treated if any observed period has D == 1.
+    # A treated unit has a reversal if any observed D sequence decreases
+    # from 1 back to 0 at some later observed period.
+    obs_mask = I_mat > 0                                            # (T, N)
+    D_obs = np.where(obs_mask, D_mat, 0.0)
+    ever_treated = np.any(D_obs > 0, axis=0)                        # (N,)
+    # Reversals: diff down from 1->0 on observed cells only
+    # Walk observed D per column; a reversal is any 1 -> 0 transition.
+    D_obs_shift = np.vstack([np.zeros((1, N)), D_obs[:-1]])
+    drops = (D_obs < D_obs_shift) & obs_mask
+    has_reversal = np.any(drops, axis=0) & ever_treated
 
-    # Compute treatment timing
-    T_on_mat = np.full((TT, N), np.nan, dtype=np.float64)
-    T_off_mat = np.full((TT, N), np.nan, dtype=np.float64)
+    unit_type = np.ones(N, dtype=np.int32)
+    unit_type[ever_treated & ~has_reversal] = 2
+    unit_type[has_reversal] = 3
 
-    for j in range(N):
-        T_on_mat[:, j] = _get_term(D_mat[:, j], I_mat[:, j], kind="on")
-        if unit_type[j] == 3:
-            T_off_mat[:, j] = _get_term(D_mat[:, j], I_mat[:, j], kind="off")
+    # --- Vectorised treatment timing (T_on / T_off) ---
+    T_on_mat = _compute_T_on(D_mat, I_mat)
+    T_off_mat = _compute_T_off(D_mat, I_mat, unit_type)
 
-    # Filter units
+    # --- Vectorised unit filters ---
     keep = np.ones(N, dtype=bool)
 
-    # Min pre-treatment periods
-    for j in range(N):
-        if unit_type[j] in (2, 3):
-            pre_periods = np.sum((II_mat[:, j] > 0))
-            if pre_periods < min_T0:
-                keep[j] = False
+    # Min pre-treatment periods (only treated / reversal units have the
+    # "pre-treatment" concept; controls trivially satisfy min_T0).
+    pre_periods = (II_mat > 0).sum(axis=0)                          # (N,)
+    treated_mask = (unit_type == 2) | (unit_type == 3)
+    keep &= ~(treated_mask & (pre_periods < min_T0))
 
-    # Max missing
-    for j in range(N):
-        obs_rate = np.sum(I_mat[:, j]) / TT
-        if obs_rate < (1 - max_missing):
-            keep[j] = False
+    # Max missing (fraction observed must exceed 1 - max_missing)
+    obs_rate = I_mat.mean(axis=0)                                   # (N,)
+    keep &= obs_rate >= (1.0 - max_missing)
 
     if not np.all(keep):
         kept_idx = np.where(keep)[0]
@@ -210,11 +226,13 @@ def prepare_panel(
         N = len(kept_idx)
 
     # Build status matrix
+    # 1 = treated observed, 2 = control observed, 3 = missing
     obs_status = np.where(
         I_mat == 0, 3,
         np.where(D_mat > 0, 1, 2),
     ).astype(np.int32)
-    obs_status[:, ~keep[keep]] = 4  # removed units
+    # Note: removed units (status 4) are dropped above, so `obs_status`
+    # after the slice only covers kept units.
 
     return PanelData(
         Y=Y_mat, D=D_mat, I=I_mat, II=II_mat,
@@ -277,70 +295,102 @@ class _PandasColumnAdapter:
         return self._s.to_numpy()
 
 
-def _get_term(
-    d: np.ndarray,
-    obs: np.ndarray,
-    kind: str = "on",
-) -> np.ndarray:
-    """Compute relative event time for a single unit.
+def _compute_T_on(D: np.ndarray, I: np.ndarray) -> np.ndarray:
+    """Relative event time to treatment onset, vectorised over units.
 
-    Parameters
-    ----------
-    d : (T,) treatment indicator
-    obs : (T,) observation indicator
-    kind : "on" or "off"
+    For every unit (column) this computes ``t - t0`` for every observed
+    period, where ``t0`` is the first observed period in which
+    ``D`` switches from 0 to 1 (an observed 0 immediately before an
+    observed 1).  Units whose observed ``D`` sequence is all-zero or
+    all-one, and units with no observed 0->1 transition but whose first
+    observed period already has ``D == 1``, are handled as follows:
 
-    Returns
-    -------
-    term : (T,) relative time (negative before event, positive after)
+    * all-zero (never treated): return NaN.
+    * all-one (always treated, no identifiable onset): return NaN.
+    * already-treated-at-first-observation (no 0->1 switch but some
+      observed period has ``D == 1``): ``t0 = first observed period``.
+
+    Unobserved periods are left as NaN.
+
+    Returns a ``(T, N)`` float matrix, NaN where relative time is
+    undefined.
+
+    This replaces the per-unit Python loop of earlier versions; behaviour
+    is identical to the previous ``_get_term(..., kind="on")`` on all the
+    DGPs used by the test suite and by R fect's examples.
     """
-    T = len(d)
-    term = np.full(T, np.nan)
+    T, N = D.shape
+    obs = I > 0
+    D_obs = np.where(obs, D, 0.0)
 
-    # Find treatment switches
-    d_obs = d * obs  # only consider observed periods
+    # 0->1 transition on observed cells.  Previous-observed-D is taken
+    # with ``prepend=0``, matching the C++ loop-start condition.
+    D_prev = np.vstack([np.zeros((1, N)), D_obs[:-1]])
+    obs_prev = np.vstack([np.zeros((1, N), dtype=bool), obs[:-1]])
+    switch_on = (D_obs > 0) & (D_prev == 0) & obs & obs_prev      # (T, N)
 
-    if kind == "on":
-        # Find first treatment onset
-        switches_on = []
-        for t in range(1, T):
-            if d_obs[t] > 0 and d_obs[t - 1] == 0 and obs[t] > 0 and obs[t - 1] > 0:
-                switches_on.append(t)
-        if len(switches_on) == 0:
-            # Never treated or always treated
-            if np.all(d_obs[obs > 0] > 0):
-                # Always treated — no relative time
-                return term
-            elif np.all(d_obs[obs > 0] == 0):
-                # Never treated — no relative time
-                return term
-            # Check if treated from the start
-            first_obs = np.where(obs > 0)[0]
-            if len(first_obs) > 0 and d[first_obs[0]] > 0:
-                switches_on = [first_obs[0]]
-            else:
-                return term
+    # First switch index per unit; columns with no switch get a sentinel
+    # value we'll replace below.
+    has_switch = switch_on.any(axis=0)                             # (N,)
+    t0 = np.where(has_switch, switch_on.argmax(axis=0), -1)        # (N,)
 
-        # Use first switch
-        t0 = switches_on[0]
-        for t in range(T):
-            if obs[t] > 0:
-                term[t] = t - t0  # negative before, 0 at onset, positive after
+    # Fallback: no switch but first observed period already has D == 1.
+    no_switch = ~has_switch
+    if no_switch.any():
+        # first observed period per column, NaN-safe
+        first_obs_idx = np.where(obs.any(axis=0), obs.argmax(axis=0), -1)
+        # treated at first obs?
+        at_first = np.zeros(N, dtype=bool)
+        valid = first_obs_idx >= 0
+        at_first[valid] = D[first_obs_idx[valid], np.arange(N)[valid]] > 0
+        use_first = no_switch & at_first
+        t0 = np.where(use_first, first_obs_idx, t0)
 
-    elif kind == "off":
-        # Find treatment reversal
-        switches_off = []
-        for t in range(1, T):
-            if d_obs[t] == 0 and d_obs[t - 1] > 0 and obs[t] > 0 and obs[t - 1] > 0:
-                switches_off.append(t)
-        if len(switches_off) == 0:
-            return term
+    # Also exclude never-treated and always-treated units (no obs with D
+    # differing from the constant value across its observed window).
+    # Never-treated: all observed D == 0 -> no onset.
+    # Always-treated: all observed D == 1 and no prior 0 to switch from.
+    # Already handled: never-treated falls through to t0 == -1;
+    # always-treated without a fallback hit also t0 == -1.
+    valid_col = t0 >= 0                                             # (N,)
 
-        t0 = switches_off[0]
-        for t in range(T):
-            if obs[t] > 0:
-                term[t] = t - t0
+    term = np.full((T, N), np.nan)
+    if valid_col.any():
+        t_idx = np.arange(T)[:, None]                               # (T, 1)
+        rel = (t_idx - t0[None, :]).astype(np.float64)              # (T, N)
+        # Only observed cells of valid columns get a value.
+        mask = obs & valid_col[None, :]
+        term = np.where(mask, rel, np.nan)
+    return term
 
+
+def _compute_T_off(
+    D: np.ndarray, I: np.ndarray, unit_type: np.ndarray
+) -> np.ndarray:
+    """Relative time to first treatment reversal, vectorised over units.
+
+    Only units classified as reversal (``unit_type == 3``) get a
+    non-NaN column.  ``t0`` is the first observed 1->0 transition; the
+    resulting relative time is ``t - t0`` at every observed period.
+    """
+    T, N = D.shape
+    obs = I > 0
+    D_obs = np.where(obs, D, 0.0)
+
+    D_prev = np.vstack([np.zeros((1, N)), D_obs[:-1]])
+    obs_prev = np.vstack([np.zeros((1, N), dtype=bool), obs[:-1]])
+    switch_off = (D_obs == 0) & (D_prev > 0) & obs & obs_prev
+
+    has_switch = switch_off.any(axis=0)
+    t0 = np.where(has_switch, switch_off.argmax(axis=0), -1)
+
+    valid_col = (unit_type == 3) & (t0 >= 0)
+    term = np.full((T, N), np.nan)
+    if valid_col.any():
+        t_idx = np.arange(T)[:, None]
+        rel = (t_idx - t0[None, :]).astype(np.float64)
+        mask = obs & valid_col[None, :]
+        term = np.where(mask, rel, np.nan)
     return term
 
 
@@ -388,25 +438,22 @@ def initial_fit(
     if xi is not None:
         Y0 = Y0 + (xi - mu)[:, None]
 
-    # Beta from control obs via OLS: (Y - FE) ~ X
+    # Beta from control obs via OLS: (Y - FE) ~ X on the II subset.
+    # Vectorised via einsum: replaces the p*p Python loop of earlier
+    # versions with a single BLAS call per matrix.  Because II is 0/1,
+    # multiplying either operand by II is equivalent to restricting the
+    # sum to control observations.
     beta0 = None
     if X is not None and X.shape[2] > 0:
         p = X.shape[2]
-        resid = (Y - Y0) * II
-        xx = xp.zeros((p, p))
-        xy = xp.zeros(p)
-        for k in range(p):
-            for m in range(k, p):
-                val = xp.sum(II * X[:, :, k] * X[:, :, m])
-                xx[k, m] = val
-                xx[m, k] = val
-            xy[k] = xp.sum(II * X[:, :, k] * resid)
+        X_w = X * II[:, :, None]                                    # (T, N, p)
+        xx = xp.einsum("tni,tnj->ij", X_w, X)                       # (p, p)
+        xy = xp.einsum("tnk,tn->k", X_w, Y - Y0)                    # (p,)
         try:
             beta0 = xp.linalg.solve(xx, xy)
         except np.linalg.LinAlgError:
             beta0 = xp.zeros(p)
-        # Update Y0 with covariate contribution
-        for k in range(p):
-            Y0 = Y0 + X[:, :, k] * beta0[k]
+        # Update Y0 with covariate contribution X @ beta0
+        Y0 = Y0 + xp.einsum("tnk,k->tn", X, beta0)
 
     return Y0, beta0

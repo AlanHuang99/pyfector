@@ -1,11 +1,35 @@
 """
-Cross-validation for selecting number of factors (IFE) or lambda (MC).
+Cross-validation for hyperparameter selection.
 
-Key performance improvements over R fect:
-- Parallel fold evaluation via joblib
-- Warm-starting: previous fold's fit used as Y0 for next candidate
-- Looser tolerance during CV (max(tol, 1e-3))
-- Seeded RNG for reproducible fold splits
+This module provides two entry points used by :func:`pyfector.fect`:
+
+* :func:`cv_ife` picks the number of latent factors ``r`` for the IFE
+  estimator by grid search over ``r_range = (r_min, r_max)``.
+* :func:`cv_mc` picks the nuclear-norm penalty ``lam`` for the
+  matrix-completion estimator over an automatically generated
+  log-spaced grid (or a user-supplied one).
+
+CV scheme
+---------
+* Hold-out cells are sampled *only* from control observations
+  (``II``).  When ``cv_treat=True`` (the default) we further restrict
+  the hold-out cells to pre-treatment periods of ever-treated units, so
+  CV mimics the prediction task the estimator faces on treated cells.
+* For each candidate we fit on the non-masked cells and score on the
+  masked cells using one of ``mspe`` (mean squared prediction error),
+  ``gmspe`` (geometric mean of squared errors), or ``mad`` (median
+  absolute deviation).  The selection rule is "lowest score, tie-broken
+  in favour of the simpler model within a 1% slack", matching R fect.
+* Fold parallelism uses a thread-backed joblib pool so the heavy
+  numpy/BLAS work runs concurrently without pickling.
+* Randomness (fold construction) is seeded via :func:`pyfector.backend.make_rng`
+  so CV is reproducible given ``seed``.
+
+The CV inner loop calls into :func:`pyfector.estimators.estimate_ife`
+and :func:`pyfector.estimators.estimate_mc` with a relaxed convergence
+tolerance ``max(tol, 1e-3)`` — the same trick R fect uses to keep CV
+cheap without affecting the final fit, which always uses the tight
+tolerance.
 """
 
 from __future__ import annotations

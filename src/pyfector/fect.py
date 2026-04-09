@@ -1,7 +1,32 @@
 """
-Main Fect estimator class — the public API of pyfector.
+Public entry point for pyfector.
 
-Usage:
+This module exposes :func:`fect`, the single function most users call,
+and the :class:`FectResult` dataclass that packages its output.
+
+:func:`fect` orchestrates the full pipeline:
+
+1. :func:`pyfector.panel.prepare_panel` converts the input DataFrame to
+   dense ``(T, N)`` matrices with treatment timing and unit
+   classification.
+2. :func:`pyfector.panel.initial_fit` computes the starting fit ``Y0``
+   and initial covariate coefficients on the control subsample.
+3. If the user passes a range for ``r`` (IFE) or leaves ``lam=None``
+   (MC), :mod:`pyfector.cv` chooses the hyperparameter by
+   cross-validation.
+4. :mod:`pyfector.estimators` iterates the EM loop for the chosen
+   method (``fe``, ``ife``, ``mc``, or ``cfe``).
+5. Treatment effects are computed from ``eff = Y - Y_ct``; the overall
+   ATT and dynamic ATT by relative event time are derived in
+   :func:`_compute_effects` via :func:`numpy.bincount`.
+6. When ``se=True`` the requested inference routine
+   (``bootstrap`` or ``jackknife``) from :mod:`pyfector.inference` is
+   called with a closure that re-runs the EM loop on resampled units.
+
+Example
+-------
+::
+
     import pyfector
 
     result = pyfector.fect(
@@ -17,9 +42,8 @@ Usage:
         n_jobs=4,
         seed=42,
     )
-
     result.summary()
-    result.plot()
+    result.plot(kind="gap")
 """
 
 from __future__ import annotations
@@ -390,35 +414,53 @@ def fect(
 
 
 def _compute_effects(eff, D, T_on, I):
-    """Compute ATT, dynamic ATT, and counts."""
+    """Compute overall ATT, per-unit ATT, and dynamic ATT by event time.
+
+    Dynamic ATT grouping is done with :func:`numpy.bincount` so the cost
+    is O(n_observed_ever_treated_cells) regardless of the number of
+    distinct relative-time values.  Per-unit ATT uses a column-wise
+    masked mean via ``np.add.reduce`` rather than a Python loop.
+    """
     treated = (D > 0) & (I > 0)
-    n_treated = np.sum(treated)
+    n_treated = int(np.sum(treated))
 
     att_avg = float(np.sum(eff[treated]) / max(n_treated, 1))
 
-    # Per-unit ATT (post-treatment only)
-    N = eff.shape[1]
-    unit_atts = []
-    for j in range(N):
-        mask_j = treated[:, j]
-        if np.any(mask_j):
-            unit_atts.append(float(np.mean(eff[mask_j, j])))
-    att_avg_unit = float(np.mean(unit_atts)) if unit_atts else 0.0
+    # Per-unit ATT (post-treatment only) — sum then divide by count,
+    # keeping only units that have at least one treated observation.
+    col_counts = treated.sum(axis=0)                                 # (N,)
+    col_sums = (eff * treated).sum(axis=0)                           # (N,)
+    has_any = col_counts > 0
+    if np.any(has_any):
+        unit_atts = col_sums[has_any] / col_counts[has_any]
+        att_avg_unit = float(unit_atts.mean())
+    else:
+        att_avg_unit = 0.0
 
-    # Dynamic ATT by relative time — include pre-treatment periods
-    # for ever-treated units (counterfactual gaps before treatment onset)
-    ever_treated = np.any(D > 0, axis=0)  # units that are ever treated
-    all_periods = (I > 0) & ever_treated[np.newaxis, :]  # all observed periods
+    # Dynamic ATT by relative event time.  Include pre-treatment periods
+    # for ever-treated units (counterfactual gaps before onset).
+    ever_treated = np.any(D > 0, axis=0)                             # (N,)
+    all_periods = (I > 0) & ever_treated[np.newaxis, :]              # (T, N)
 
-    T_on_flat = T_on[all_periods].ravel()
-    eff_flat = eff[all_periods].ravel()
+    T_on_flat = T_on[all_periods]
+    eff_flat = eff[all_periods]
     valid = ~np.isnan(T_on_flat)
-    T_on_flat = T_on_flat[valid]
+    T_on_flat = T_on_flat[valid].astype(np.int64)
     eff_flat = eff_flat[valid]
 
-    time_on = np.sort(np.unique(T_on_flat))
-    att_on = np.array([float(np.mean(eff_flat[T_on_flat == t])) for t in time_on])
-    count_on = np.array([int(np.sum(T_on_flat == t)) for t in time_on])
+    if T_on_flat.size == 0:
+        return att_avg, np.array([]), np.array([]), np.array([], dtype=np.int64), att_avg_unit
+
+    # Bincount over the shifted integer indices.
+    offset = int(T_on_flat.min())
+    idx = T_on_flat - offset
+    minlength = int(T_on_flat.max() - offset + 1)
+    sums = np.bincount(idx, weights=eff_flat, minlength=minlength)
+    counts = np.bincount(idx, minlength=minlength)
+    keep = counts > 0
+    time_on = (offset + np.arange(minlength))[keep].astype(np.float64)
+    att_on = (sums[keep] / counts[keep]).astype(np.float64)
+    count_on = counts[keep].astype(np.int64)
 
     return att_avg, att_on, time_on, count_on, att_avg_unit
 

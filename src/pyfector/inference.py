@@ -1,11 +1,34 @@
 """
-Bootstrap, jackknife, and permutation inference.
+Non-parametric inference: bootstrap, jackknife, and permutation.
 
-Key performance improvements over R fect:
-- Parallel bootstrap replications via joblib
-- Warm-starting from point estimate
-- Seeded RNG for full reproducibility
-- GPU-accelerated matrix operations when device="gpu"
+This module builds confidence intervals and standard errors around the
+point estimates returned by :func:`pyfector.fect`.  All three routines
+resample *units* (not cells), so they naturally respect within-unit
+dependence:
+
+* :func:`bootstrap` — draws ``nboots`` bootstrap samples of unit indices
+  with replacement, re-estimates on each sample, and returns pivotal
+  confidence intervals, bootstrap SEs, and two-sided p-values.  Treated,
+  control, and reversal units are resampled separately so the treated
+  share stays fixed across replicates (stratified bootstrap); when
+  ``cluster`` is supplied we fall back to a cluster bootstrap.
+* :func:`jackknife` — delete-one-unit jackknife with the standard
+  ``(N-1)/N`` variance correction and t-distribution CIs.
+* :func:`permutation_test` — shuffles treatment assignment and compares
+  the observed ATT to the null distribution of permuted ATTs.
+
+Implementation notes
+--------------------
+* Replications are parallelised via joblib.  The default backend is
+  ``processes`` to avoid GIL contention on long-running fits; for
+  repeated small fits ``prefer="threads"`` can be cheaper because
+  numpy releases the GIL inside BLAS.
+* Every replicate receives a deterministic seed derived from the
+  master ``seed`` so results are reproducible.
+* The dynamic-ATT grid is pinned to the point-estimate's ``time_on``
+  so replicate outputs can be stacked into a ``(n_periods, nboots)``
+  matrix even when a resampled draw happens to miss a relative-time
+  value.
 """
 
 from __future__ import annotations
@@ -293,33 +316,58 @@ def _compute_att(
     T_on: np.ndarray,    # (T, N) relative time
     time_on: np.ndarray | None = None,
 ) -> tuple[float, np.ndarray, np.ndarray]:
-    """Compute overall and dynamic ATT from effect matrix.
+    """Compute overall and dynamic ATT from the effect matrix.
 
-    Returns (att_avg, att_on, time_on).
+    Uses ``np.bincount`` for the event-time grouping so the cost is
+    linear in the number of observed cells.  When ``time_on`` is
+    supplied the caller's grid is preserved exactly so bootstrap
+    replicates can be stacked into a ``(n_periods, nboots)`` matrix even
+    if some replicates happen to not observe every event time.
     """
-    # Overall ATT: weighted mean of effects where D==1
     treated_mask = D > 0
-    n_treated = np.sum(treated_mask)
-    if n_treated == 0:
-        att_avg = 0.0
-    else:
-        att_avg = float(np.sum(eff[treated_mask]) / n_treated)
+    n_treated = int(np.sum(treated_mask))
+    att_avg = 0.0 if n_treated == 0 else float(np.sum(eff[treated_mask]) / n_treated)
 
-    # Dynamic ATT by relative time — use all periods of ever-treated units
-    ever_treated = np.any(D > 0, axis=0)
-    all_periods = ever_treated[np.newaxis, :]  # broadcast (1, N) → (T, N)
-    # Use np.broadcast_to to avoid shape mismatch, then flatten
-    all_mask = np.broadcast_to(all_periods, T_on.shape)
-    T_on_flat = T_on[all_mask].ravel()
-    eff_flat = eff[all_mask].ravel()
+    ever_treated = np.any(D > 0, axis=0)                            # (N,)
+    all_mask = np.broadcast_to(ever_treated[np.newaxis, :], T_on.shape)
+    T_on_flat = T_on[all_mask]
+    eff_flat = eff[all_mask]
+    valid = ~np.isnan(T_on_flat)
+    T_on_flat = T_on_flat[valid]
+    eff_flat = eff_flat[valid]
+
+    if T_on_flat.size == 0:
+        if time_on is None:
+            return att_avg, np.array([]), np.array([])
+        return att_avg, np.full(len(time_on), np.nan), time_on
+
+    T_on_int = T_on_flat.astype(np.int64)
 
     if time_on is None:
-        time_on = np.sort(np.unique(T_on_flat[~np.isnan(T_on_flat)]))
+        offset = int(T_on_int.min())
+        minlength = int(T_on_int.max() - offset + 1)
+        idx = T_on_int - offset
+        sums = np.bincount(idx, weights=eff_flat, minlength=minlength)
+        counts = np.bincount(idx, minlength=minlength)
+        keep = counts > 0
+        time_on = (offset + np.arange(minlength))[keep].astype(np.float64)
+        att_on = sums[keep] / counts[keep]
+        return att_avg, att_on, time_on
 
+    # Caller supplied a grid: produce att_on aligned to time_on so that
+    # bootstrap replicates can be stacked with a fixed shape.
+    time_on_int = np.asarray(time_on, dtype=np.int64)
+    grid_offset = int(time_on_int.min())
+    grid_len = int(time_on_int.max() - grid_offset + 1)
+    # Bin flat values that fall inside the grid range.
+    in_range = (T_on_int >= grid_offset) & (T_on_int < grid_offset + grid_len)
+    T_clip = T_on_int[in_range] - grid_offset
+    e_clip = eff_flat[in_range]
+    sums = np.bincount(T_clip, weights=e_clip, minlength=grid_len)
+    counts = np.bincount(T_clip, minlength=grid_len)
+    gather = time_on_int - grid_offset                              # (n_periods,)
     att_on = np.full(len(time_on), np.nan)
-    for i, t in enumerate(time_on):
-        mask = T_on_flat == t
-        if np.any(mask):
-            att_on[i] = float(np.mean(eff_flat[mask]))
-
+    counts_at_grid = counts[gather]
+    valid_grid = counts_at_grid > 0
+    att_on[valid_grid] = sums[gather[valid_grid]] / counts_at_grid[valid_grid]
     return att_avg, att_on, time_on

@@ -1,12 +1,36 @@
 """
-Core linear algebra primitives for pyfector.
+Core linear algebra primitives.
 
-Key performance improvement over R fect: **randomized / truncated SVD**
-instead of full SVD.  For a T×N matrix with rank-r target the cost drops
-from O(T·N·min(T,N)) to O(T·N·r), which is the dominant bottleneck.
+This module hosts the numerical kernels that the EM engines in
+:mod:`pyfector.estimators` call on every iteration: truncated SVD, panel
+factor extraction, nuclear-norm thresholding, additive/interactive
+fixed-effect assembly, and the partialled-out OLS ``beta`` step.
 
-All functions obtain the array module via ``get_backend()`` so they work
-transparently on CPU (NumPy) or GPU (CuPy).
+Relationship to R fect
+----------------------
+* :func:`panel_factor` matches R fect's ``panel_factor`` (``fe_sub.cpp``):
+  it eigendecomposes the smaller of the two Gram matrices
+  ``E @ E.T / (N*T)`` or ``E.T @ E / (N*T)`` and recovers the requested
+  number of factors.  When ``r`` is small relative to ``min(T, N)``
+  pyfector dispatches the top-``r`` factor extraction through the
+  randomised :func:`truncated_svd`, which gives the same subspace up to
+  rotation at O(T·N·r) cost — a big saving when ``min(T, N)`` is large.
+  The identification ``factors = sqrt(T) * U_r``,
+  ``loadings = E.T @ factors / T`` is preserved either way.
+* :func:`panel_FE` matches R fect's soft/hard singular-value
+  thresholding operator for the matrix-completion estimator.
+* :func:`demean` and :func:`fe_add` implement the ``force`` conventions
+  used throughout R fect: 0 = none, 1 = unit, 2 = time, 3 = two-way.
+* :func:`panel_beta` / :func:`compute_xxinv` replicate R fect's
+  ``panel_beta`` / ``(w)XXinv`` (``auxiliary.cpp``) using single einsum
+  calls instead of Python loops over covariates.
+
+Backend abstraction
+-------------------
+All functions call :func:`pyfector.backend.get_backend` so they work
+transparently on CPU (NumPy) and GPU (CuPy).  Host-sync scalar
+conversions (``float(...)``) are avoided in the inner loops so the GPU
+path does not stall every iteration.
 """
 
 from __future__ import annotations
@@ -94,14 +118,27 @@ class FactorResult(NamedTuple):
 
 
 def panel_factor(E, r: int) -> FactorResult:
-    """Extract *r* latent factors and loadings from residual matrix *E* (T×N).
+    """Extract ``r`` latent factors and loadings from the ``(T, N)`` error
+    matrix ``E``.
 
-    Matches R fect's ``panel_factor()`` exactly:
-    - Computes eigen decomposition of EE'/(NT) or E'E/(NT) (the smaller one)
-    - factors = top-r eigenvectors * sqrt(T)
-    - loadings = E' @ factors / T
+    Matches R fect's ``panel_factor`` identification exactly:
 
-    For large matrices (min(T,N) > 50), uses randomized SVD for O(NTr) cost.
+    * factors ``F = sqrt(T) * U_r`` where ``U_r`` is the top-``r`` left
+      singular vectors of ``E @ E.T / (N*T)`` (or equivalently of
+      ``E / sqrt(N*T)``).
+    * loadings ``Lambda = E.T @ F / T``.
+    * ``FE = F @ Lambda.T``.
+
+    When ``r`` is small compared to ``min(T, N)``, pyfector extracts the
+    top-``r`` singular vectors via :func:`truncated_svd` (randomised
+    SVD), which is O(T·N·(r + oversample)) rather than the
+    O(min(T, N)^3) cost of forming the full Gram matrix.  The resulting
+    factors/loadings span the same ``r``-dimensional subspace as the
+    full-SVD path; the only difference is numerical rotation within the
+    subspace, which is immaterial for downstream fit and treatment-effect
+    estimates.  For small problems, or when ``r`` is close to the full
+    rank, the exact path is still used (see the ``use_rsvd`` branch
+    below).
     """
     xp = get_backend()
     T, N = E.shape
@@ -113,24 +150,37 @@ def panel_factor(E, r: int) -> FactorResult:
             xp.zeros((T, N), dtype=E.dtype),
         )
 
-    if T < N:
-        # Work with the T×T covariance: EE'/(NT)
-        EE = E @ E.T / (N * T)
-        # SVD of the symmetric PSD matrix (= eigendecomposition)
-        U, s, _ = xp.linalg.svd(EE, full_matrices=False)
-        factors = U[:, :r] * xp.sqrt(xp.array(T, dtype=E.dtype))   # (T, r)
+    # Decide between randomised truncated SVD and exact full SVD.
+    # The randomised path pays off when the target rank is well below the
+    # full matrix rank.  We use it when r <= min(T, N) / 4 and the
+    # matrix is large enough that the constant factors matter.
+    min_dim = min(T, N)
+    use_rsvd = (r * 4 <= min_dim) and (min_dim > 50)
+
+    if use_rsvd:
+        # Top-r left singular vectors of E match the top-r eigenvectors
+        # of E E'; scaled by sqrt(T) they equal pyfector/fect factors.
+        svd = truncated_svd(E, r=r)
+        U = svd.U                                  # (T, r)
+        s = svd.s                                  # (r,)
+        factors = U * xp.sqrt(xp.asarray(T, dtype=E.dtype))        # (T, r)
         loadings = E.T @ factors / T                                 # (N, r)
+        # Eigenvalues of E E' / (N T) are s^2 / (N T).
+        eigenvalues = (s * s) / (N * T)
+    elif T < N:
+        EE = E @ E.T / (N * T)
+        U, s, _ = xp.linalg.svd(EE, full_matrices=False)
+        factors = U[:, :r] * xp.sqrt(xp.asarray(T, dtype=E.dtype))  # (T, r)
+        loadings = E.T @ factors / T                                  # (N, r)
         eigenvalues = s[:r]
     else:
-        # Work with the N×N covariance: E'E/(NT)
         EE = E.T @ E / (N * T)
         U, s, _ = xp.linalg.svd(EE, full_matrices=False)
-        loadings = U[:, :r] * xp.sqrt(xp.array(N, dtype=E.dtype))  # (N, r)
-        factors = E @ loadings / N                                   # (T, r)
+        loadings = U[:, :r] * xp.sqrt(xp.asarray(N, dtype=E.dtype))  # (N, r)
+        factors = E @ loadings / N                                    # (T, r)
         eigenvalues = s[:r]
 
     FE = factors @ loadings.T
-
     return FactorResult(factors, loadings, eigenvalues, FE)
 
 
@@ -313,59 +363,65 @@ def ife(E, force: int, mc: bool = False, r: int = 0,
 # ---------------------------------------------------------------------------
 
 def panel_beta(X, Y, FE, xxinv=None, W=None):
-    """OLS beta with FE partialled out.
+    """OLS ``beta`` with the fixed-effect fit partialled out.
+
+    Given a ``(T, N, p)`` covariate tensor, an outcome ``Y``, and the
+    current fixed-effect fit ``FE`` (also ``(T, N)``), solve
+
+    .. math::
+
+        \\beta = (X' W X)^{-1} X' W (Y - FE)
+
+    where ``W`` defaults to the identity observation weight.  This is the
+    closed-form step inside the EM loop whenever covariates are present.
 
     Parameters
     ----------
-    X : array (T, N, p)
-    Y : array (T, N)
-    FE : array (T, N)
-    xxinv : array (p, p), optional – precomputed (X'X)^-1
-    W : array (T, N), optional – weights
+    X : ``(T, N, p)`` ndarray
+        Covariate tensor.
+    Y : ``(T, N)`` ndarray
+    FE : ``(T, N)`` ndarray
+    xxinv : ``(p, p)`` ndarray, optional
+        Precomputed ``(X' W X)^{-1}``.  If supplied, reused as-is.
+    W : ``(T, N)`` ndarray, optional
+        Observation weights.  When ``None``, unweighted OLS.
+
+    Notes
+    -----
+    Implemented as single einsum calls so the work is pushed into BLAS
+    instead of a per-covariate Python loop.  Equivalent to R fect's
+    ``panel_beta`` / ``wpanel_beta`` (``auxiliary.cpp``).
     """
     xp = get_backend()
-    p = X.shape[2]
     resid = Y - FE  # (T, N)
 
     if W is not None:
-        sqW = xp.sqrt(W)
-        xy = xp.array([xp.sum(sqW * X[:, :, k] * sqW * resid) for k in range(p)])
+        # xy_k = sum_{t,n} W_{tn} X_{tnk} resid_{tn}
+        xy = xp.einsum("tnk,tn,tn->k", X, W, resid)
         if xxinv is None:
-            xx = xp.zeros((p, p), dtype=X.dtype)
-            for k in range(p):
-                for m in range(k, p):
-                    val = xp.sum(W * X[:, :, k] * X[:, :, m])
-                    xx[k, m] = val
-                    xx[m, k] = val
+            xx = xp.einsum("tni,tnj,tn->ij", X, X, W)
             xxinv = xp.linalg.inv(xx)
     else:
-        xy = xp.array([xp.sum(X[:, :, k] * resid) for k in range(p)])
+        xy = xp.einsum("tnk,tn->k", X, resid)
         if xxinv is None:
-            xx = xp.zeros((p, p), dtype=X.dtype)
-            for k in range(p):
-                for m in range(k, p):
-                    val = xp.sum(X[:, :, k] * X[:, :, m])
-                    xx[k, m] = val
-                    xx[m, k] = val
+            xx = xp.einsum("tni,tnj->ij", X, X)
             xxinv = xp.linalg.inv(xx)
 
-    beta = xxinv @ xy
-    return beta
+    return xxinv @ xy
 
 
 def compute_xxinv(X, W=None):
-    """Precompute (X'X)^-1 or (X'WX)^-1."""
+    """Precompute ``(X' X)^{-1}`` or ``(X' W X)^{-1}`` via einsum.
+
+    Same contract as in R fect's ``XXinv`` / ``wXXinv``; vectorised so
+    the per-``p`` Python loop of earlier versions is replaced by a
+    single BLAS call.
+    """
     xp = get_backend()
-    p = X.shape[2]
-    xx = xp.zeros((p, p), dtype=X.dtype)
-    for k in range(p):
-        for m in range(k, p):
-            if W is not None:
-                val = xp.sum(W * X[:, :, k] * X[:, :, m])
-            else:
-                val = xp.sum(X[:, :, k] * X[:, :, m])
-            xx[k, m] = val
-            xx[m, k] = val
+    if W is not None:
+        xx = xp.einsum("tni,tnj,tn->ij", X, X, W)
+    else:
+        xx = xp.einsum("tni,tnj->ij", X, X)
     return xp.linalg.inv(xx)
 
 
