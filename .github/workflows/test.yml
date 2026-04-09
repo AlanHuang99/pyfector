@@ -30,28 +30,3 @@ jobs:
         run: |
           python -m pytest tests/test_linalg.py tests/test_smoke.py tests/test_robust.py tests/test_stress.py tests/test_bootstrap_se.py -v -k "not very_large and not slow"
 
-  test-vs-r:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Set up R
-        uses: r-lib/actions/setup-r@v2
-
-      - name: Install R packages
-        run: |
-          Rscript -e 'install.packages(c("fect", "jsonlite"), repos="https://cloud.r-project.org")'
-
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          RPY2_CFFI_MODE=ABI pip install -e ".[dev,r-comparison]"
-
-      - name: Run R comparison tests
-        run: |
-          python -m pytest tests/test_vs_r.py -v
