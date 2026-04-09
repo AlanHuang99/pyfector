@@ -28,7 +28,7 @@ jobs:
 
       - name: Run tests
         run: |
-          python -m pytest tests/test_linalg.py tests/test_smoke.py tests/test_pressure.py tests/test_bootstrap_se.py -v -k "not very_large and not slow"
+          python -m pytest tests/test_linalg.py tests/test_smoke.py tests/test_robust.py tests/test_stress.py tests/test_bootstrap_se.py -v -k "not very_large and not slow"
 
   test-vs-r:
     runs-on: ubuntu-latest
@@ -54,4 +54,4 @@ jobs:
 
       - name: Run R comparison tests
         run: |
-          python -m pytest tests/test_vs_r_fect.py -v
+          python -m pytest tests/test_vs_r.py -v

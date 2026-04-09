@@ -23,7 +23,7 @@ Usage::
 
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from .fect import fect, FectResult
 from .backend import set_device, get_device
