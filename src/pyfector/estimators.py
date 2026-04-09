@@ -68,17 +68,31 @@ from .linalg import (
 # E-step helpers
 # ---------------------------------------------------------------------------
 
-def _e_adj(Y, fit, I):
-    """Fill missing entries (I==0) with current fit values."""
-    xp = get_backend()
-    return xp.where(I, Y, fit)
+def _e_adj(Y, fit, I, out=None):
+    """Fill missing entries (I==0) with current fit values.
 
-
-def _we_adj(Y, fit, W, I):
-    """Weighted E-step: observed entries shrunk toward fit by weight."""
+    When *out* is supplied the result is written into it, avoiding a
+    fresh allocation on every EM iteration.
+    """
     xp = get_backend()
-    out = xp.where(I, W * Y + (1.0 - W) * fit, fit)
+    if out is None:
+        return xp.where(I, Y, fit)
+    xp.copyto(out, fit)
+    xp.copyto(out, Y, where=I.astype(bool))
     return out
+
+
+def _we_adj(Y, fit, W, I, out=None):
+    """Weighted E-step: observed entries shrunk toward fit by weight.
+
+    When *out* is supplied the result is written into it.
+    """
+    xp = get_backend()
+    result = xp.where(I, W * Y + (1.0 - W) * fit, fit)
+    if out is not None:
+        xp.copyto(out, result)
+        return out
+    return result
 
 
 def _fe_adj(FE, I):
@@ -87,7 +101,7 @@ def _fe_adj(FE, I):
     return xp.where(I, FE, 0.0)
 
 
-def _frob_ratio(new, old, W=None):
+def _frob_ratio(new, old, W=None, buf=None):
     """Relative Frobenius norm change: ``||new - old||_F / ||old||_F``.
 
     Computed via a single square root (``sqrt(diff2 / base2)``) to avoid
@@ -95,9 +109,16 @@ def _frob_ratio(new, old, W=None):
     is unavoidable but is done only once.  On GPU we compute the ratio
     device-side and sync only the final scalar, which saves a host
     round-trip per EM iteration.
+
+    When *buf* is supplied (same shape as *new*), the ``new - old``
+    difference is computed into it to avoid allocating a temporary.
     """
     xp = get_backend()
-    delta = new - old
+    if buf is not None:
+        xp.subtract(new, old, out=buf)
+        delta = buf
+    else:
+        delta = new - old
     if W is not None:
         diff2 = xp.sum(W * delta * delta)
         base2 = xp.sum(W * old * old) + 1e-20
@@ -223,21 +244,26 @@ def _em_fe_ad(Y, Y0, I, W, WI, use_weight, force, tol, max_iter):
     fit = Y0.copy()
     converged = False
 
+    # Pre-allocate reusable buffers for the hot loop.
+    fit_old = xp.empty_like(Y)
+    YY = xp.empty_like(Y)
+    _buf = xp.empty_like(Y)  # scratch for _frob_ratio
+
     for niter in range(1, max_iter + 1):
-        fit_old = fit.copy()
+        xp.copyto(fit_old, fit)
 
         # E-step
         if use_weight:
-            YY = _we_adj(Y, fit, W, I)
+            _we_adj(Y, fit, W, I, out=YY)
         else:
-            YY = _e_adj(Y, fit, I)
+            _e_adj(Y, fit, I, out=YY)
 
         # M-step: demean and reconstruct
         ife_res = ife(YY, force, mc=False, r=0)
         fit = ife_res.FE
 
         # Convergence
-        dif = _frob_ratio(fit, fit_old, W=WI if use_weight else None)
+        dif = _frob_ratio(fit, fit_old, W=WI if use_weight else None, buf=_buf)
         if dif < tol:
             converged = True
             break
@@ -267,6 +293,11 @@ def _em_fe_inter(Y, Y0, I, W, WI, use_weight, force, r, tol, max_iter):
     burn_in_done = False
     niter_total = 0
 
+    # Pre-allocate reusable buffers.
+    fit_old = xp.empty_like(Y)
+    YY = xp.empty_like(Y)
+    _buf = xp.empty_like(Y)
+
     for phase in range(2):
         # Phase 0: burn-in (start with high rank, reduce gradually)
         # Phase 1: final estimation with target r
@@ -278,13 +309,13 @@ def _em_fe_inter(Y, Y0, I, W, WI, use_weight, force, r, tol, max_iter):
         fit_current = fit_phase.copy()
 
         for niter in range(1, max_iter + 1):
-            fit_old = fit_current.copy()
+            xp.copyto(fit_old, fit_current)
 
             # E-step
             if use_weight:
-                YY = _we_adj(Y, fit_current, W, I)
+                _we_adj(Y, fit_current, W, I, out=YY)
             else:
-                YY = _e_adj(Y, fit_current, I)
+                _e_adj(Y, fit_current, I, out=YY)
 
             # Current rank (burn-in decreases from d)
             if phase == 0:
@@ -297,7 +328,7 @@ def _em_fe_inter(Y, Y0, I, W, WI, use_weight, force, r, tol, max_iter):
             fit_current = ife_res.FE
 
             # Convergence
-            dif = _frob_ratio(fit_current, fit_old, W=WI if use_weight else None)
+            dif = _frob_ratio(fit_current, fit_old, W=WI if use_weight else None, buf=_buf)
             niter_total += 1
 
             if dif < tol:
@@ -368,6 +399,7 @@ def _em_fe_ad_covar(Y, Y0, X, I, W, WI, use_weight, beta, xxinv, force, tol, max
     # Every 3rd step we extrapolate; otherwise plain EM.
     niter = 0
     ife_res = None
+    _buf = xp.empty_like(Y)  # scratch for _frob_ratio
     while niter < max_iter:
         fit_old = fit.copy()
 
@@ -375,7 +407,7 @@ def _em_fe_ad_covar(Y, Y0, X, I, W, WI, use_weight, beta, xxinv, force, tol, max
         fit1, FE1, beta1, ife_res1 = _one_em_step(fit, FE, beta)
         niter += 1
 
-        dif = _frob_ratio(fit1, fit_old, W=WI if use_weight else None)
+        dif = _frob_ratio(fit1, fit_old, W=WI if use_weight else None, buf=_buf)
         if dif < tol:
             fit, FE, beta, ife_res = fit1, FE1, beta1, ife_res1
             converged = True
@@ -408,7 +440,7 @@ def _em_fe_ad_covar(Y, Y0, X, I, W, WI, use_weight, beta, xxinv, force, tol, max
         else:
             fit, FE, beta, ife_res = fit2, FE2, beta2, ife_res2
 
-        dif = _frob_ratio(fit, fit_old, W=WI if use_weight else None)
+        dif = _frob_ratio(fit, fit_old, W=WI if use_weight else None, buf=_buf)
         if dif < tol:
             converged = True
             break
@@ -464,6 +496,8 @@ def _em_fe_inter_covar(Y, Y0, X, I, W, WI, use_weight, beta, xxinv, force, r, to
         ires = ife(U, force, mc=False, r=r_cur)
         return c + ires.FE, ires.FE, b, ires
 
+    _buf = xp.empty_like(Y)  # scratch for _frob_ratio
+
     for phase in range(2):
         if phase == 0 and not use_weight:
             continue
@@ -484,7 +518,7 @@ def _em_fe_inter_covar(Y, Y0, X, I, W, WI, use_weight, beta, xxinv, force, r, to
             niter += 1
             niter_total += 1
 
-            dif = _frob_ratio(fit1, fit_old, W=WI if use_weight else None)
+            dif = _frob_ratio(fit1, fit_old, W=WI if use_weight else None, buf=_buf)
             if dif < tol:
                 fit_current, FE_current, beta_current, ife_res = fit1, FE1, beta1, ires1
                 if phase == 0:
@@ -519,7 +553,7 @@ def _em_fe_inter_covar(Y, Y0, X, I, W, WI, use_weight, beta, xxinv, force, r, to
             else:
                 fit_current, FE_current, beta_current, ife_res = fit2, FE2, beta2, ires2
 
-            dif = _frob_ratio(fit_current, fit_old, W=WI if use_weight else None)
+            dif = _frob_ratio(fit_current, fit_old, W=WI if use_weight else None, buf=_buf)
             if dif < tol:
                 if phase == 0:
                     burn_in_done = True
@@ -634,12 +668,13 @@ def estimate_mc(
     # SQUAREM-accelerated EM
     niter = 0
     ife_res = None
+    _buf = xp.empty_like(Y)  # scratch for _frob_ratio
     while niter < max_iter:
         fit_old = fit.copy()
 
         fit1, FE1, beta1, cf1, ires1 = _one_mc_step(fit, FE, beta, cf)
         niter += 1
-        dif = _frob_ratio(fit1, fit_old, W=WI if use_weight else None)
+        dif = _frob_ratio(fit1, fit_old, W=WI if use_weight else None, buf=_buf)
         if dif < tol:
             fit, FE, beta, cf, ife_res = fit1, FE1, beta1, cf1, ires1
             converged = True
@@ -667,7 +702,7 @@ def estimate_mc(
         else:
             fit, FE, beta, cf, ife_res = fit2, FE2, beta2, cf2, ires2
 
-        dif = _frob_ratio(fit, fit_old, W=WI if use_weight else None)
+        dif = _frob_ratio(fit, fit_old, W=WI if use_weight else None, buf=_buf)
         if dif < tol:
             converged = True
             break
@@ -752,6 +787,7 @@ def estimate_cfe(
 
     converged = False
     consec_converged = 0
+    _buf = xp.empty_like(Y)  # scratch for _frob_ratio
 
     for niter in range(1, max_iter + 1):
         fit_old = fit.copy()
@@ -794,7 +830,7 @@ def estimate_cfe(
 
         fit = cf + gamma_fit + kappa_fit + FE_ad + FE_inter
 
-        dif = _frob_ratio(fit, fit_old, W=WI if use_weight else None)
+        dif = _frob_ratio(fit, fit_old, W=WI if use_weight else None, buf=_buf)
         if dif < tol:
             consec_converged += 1
             if consec_converged >= 3:
