@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.5 - 2026-05-01
+
+- Made cross-validation paper-faithful by default: `cv_rule="min"` now selects the strict lowest-score candidate.
+- Added `cv_rule="onepct"` as the explicit 1% slack heuristic for conservative model-complexity sensitivity checks.
+- Removed obsolete CV-rule compatibility spelling so rule names reflect the implemented criteria exactly.
+- Clarified and enforced missing-outcome semantics: missing raw `Y` cells are masked by `I`, all-missing units are dropped, and missing treated outcomes do not enter ATT or inference aggregation.
+- Expanded README, reference docs, pdoc API output, and regression tests for CV-rule and sparse-panel behavior.
+
 ## 0.1.4 - 2026-05-01
 
 - Fixed bootstrap inference when treated outcomes are missing. Overall bootstrap ATT, confidence intervals, and p-values now respect the observed-cell mask.

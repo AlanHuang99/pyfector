@@ -18,8 +18,11 @@ CV scheme
 * For each candidate we fit on the non-masked cells and score on the
   masked cells using one of ``mspe`` (mean squared prediction error),
   ``gmspe`` (geometric mean of squared errors), or ``mad`` (median
-  absolute deviation).  The selection rule is "lowest score, tie-broken
-  in favour of the simpler model within a 1% slack", matching R fect.
+  absolute deviation).  The paper-faithful default is
+  ``cv_rule="min"``, which chooses the candidate with the lowest
+  validation score.  ``cv_rule="onepct"`` is an explicit slack option:
+  it chooses the simplest candidate within 1% of the best score (lower
+  ``r`` for IFE and higher ``lam`` for MC).
 * Fold parallelism uses a thread-backed joblib pool so the heavy
   numpy/BLAS work runs concurrently without pickling.
 * Randomness (fold construction) is seeded via :func:`pyfector.backend.make_rng`
@@ -209,6 +212,7 @@ def cv_ife(
     cv_treat: bool = True,
     cv_donut: int = 0,
     criterion: str = "mspe",
+    cv_rule: Literal["min", "onepct"] = "min",
     tol: float = 1e-5,
     max_iter: int = 1000,
     n_jobs: int = 1,
@@ -222,6 +226,10 @@ def cv_ife(
         Range of candidate factor numbers.
     k : int
         Number of CV folds.
+    cv_rule : {"min", "onepct"}
+        ``"min"`` selects the lowest-score candidate, matching the
+        paper's cross-validation description. ``"onepct"`` selects the
+        lowest rank within 1% of the global best score.
     n_jobs : int
         Number of parallel workers for fold evaluation.
     """
@@ -270,8 +278,8 @@ def cv_ife(
             avg_scores[metric] = sum(fs[metric] for fs in fold_scores) / len(fold_scores)
         scores[r_cand] = avg_scores
 
-    # Select best r (with 1% improvement threshold)
-    best_r = _select_best(scores, r_candidates, criterion)
+    # r_candidates is ordered from simpler to more flexible.
+    best_r = _select_best(scores, r_candidates, criterion, cv_rule=cv_rule)
 
     return CVResult(best_r=best_r, best_lambda=None, scores=scores, all_residuals={})
 
@@ -298,6 +306,7 @@ def cv_mc(
     cv_treat: bool = True,
     cv_donut: int = 0,
     criterion: str = "mspe",
+    cv_rule: Literal["min", "onepct"] = "min",
     tol: float = 1e-5,
     max_iter: int = 1000,
     n_jobs: int = 1,
@@ -306,7 +315,8 @@ def cv_mc(
     """Cross-validate to select lambda (nuclear norm penalty).
 
     If ``lambda_candidates`` is None, generates a log-spaced grid from the
-    data's largest singular value down to 0.
+    data's largest singular value down to 0. With ``cv_rule="onepct"``, the
+    largest penalty within 1% of the global best score is selected.
     """
     xp = get_backend()
     rng = make_rng(seed)
@@ -350,7 +360,14 @@ def cv_mc(
             avg_scores[metric] = sum(fs[metric] for fs in fold_scores) / len(fold_scores)
         scores[lam_key] = avg_scores
 
-    best_lambda = _select_best(scores, [float(l) for l in lambda_candidates], criterion)
+    # Select from heavier to lighter regularization, i.e. from simpler
+    # to more flexible. Sort here so user-supplied grids behave the same
+    # way as the generated grid.
+    lambda_order = sorted([float(l) for l in lambda_candidates], reverse=True)
+    best_lambda = _select_best(
+        scores, lambda_order, criterion,
+        cv_rule=cv_rule,
+    )
 
     return CVResult(best_r=None, best_lambda=best_lambda, scores=scores, all_residuals={})
 
@@ -370,13 +387,32 @@ def _make_lambda_grid(Y, II, nlambda: int):
     return np.array(grid)
 
 
-def _select_best(scores: dict, candidates: list, criterion: str):
-    """Select best candidate with 1% improvement threshold."""
-    vals = [(c, scores[c][criterion]) for c in candidates]
-    vals.sort(key=lambda x: x[1])
-    best = vals[0]
-    # Apply 1% threshold: prefer simpler model if improvement < 1%
+def _select_best(
+    scores: dict,
+    candidates: list,
+    criterion: str,
+    cv_rule: Literal["min", "onepct"] = "min",
+):
+    """Select a CV candidate by min score or an explicit 1% slack rule.
+
+    ``"min"`` is the paper-faithful rule: select the candidate with the
+    lowest validation score.  For ``cv_rule="onepct"``, ``candidates``
+    must be ordered from simpler to more flexible; the selected candidate
+    is the first candidate within 1% of the global best score.
+    """
+    if not candidates:
+        raise ValueError("candidates must not be empty")
+    if cv_rule not in {"min", "onepct"}:
+        raise ValueError("cv_rule must be 'min' or 'onepct'")
+
+    vals = [(c, float(scores[c][criterion])) for c in candidates]
+    if cv_rule == "min":
+        return min(vals, key=lambda x: x[1])[0]
+
+    best_score = min(v for _, v in vals)
+    threshold = best_score * 1.01
     for c, v in vals:
-        if v <= best[1] * 1.01:
+        if v <= threshold:
             return c
-    return best[0]
+
+    return min(vals, key=lambda x: x[1])[0]

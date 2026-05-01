@@ -1,12 +1,28 @@
 # pyfector API Reference
 
-**Version 0.1.4**
+**Version 0.1.5**
 
 ## Overview
 
 pyfector implements counterfactual estimators for panel data, closely following the R [fect](https://github.com/xuyiqing/fect) package (Liu, Wang & Xu, 2024). Built on numpy, scipy, polars, joblib, and (optionally) CuPy.
 
 **Pipeline:** `prepare_panel()` -> `initial_fit()` -> CV (optional) -> `estimate_*()` -> effects -> inference -> `FectResult`
+
+---
+
+## Design policy
+
+pyfector defaults to the published counterfactual-estimator papers when paper language and historical R-package behavior diverge.
+
+### Cross-validation
+
+The paper-faithful default is `cv_rule="min"`: select the candidate with the lowest validation score under `criterion`. `cv_rule="onepct"` is available as an explicit slack heuristic that selects the simpler candidate within 1% of the best score.
+
+### Missing outcomes
+
+Raw missing outcomes are distinct from counterfactual missingness induced by treatment. Observed untreated cells fit the response surface. Observed treated cells contribute effects as `Y - Y_ct`. Raw missing `Y` cells are excluded from fitting and from ATT aggregation. Internally, dense matrices use `0.0` as a placeholder for missing `Y`, but `panel.I` is the authoritative observation mask.
+
+The default estimand is the ATT over observed treated outcome cells in the matched panel, using all available observed untreated outcomes for counterfactual fitting. Sparse controls are retained if they have at least one observed outcome and satisfy `max_missing`; they do not need to satisfy `min_T0` unless `min_T0_strict=True`. Units with no observed outcome are always dropped.
 
 ---
 
@@ -21,9 +37,10 @@ fect(
     method="ife", force="two-way",
     r=0, lam=None, nlambda=10,
     CV=True, k=10, cv_prop=0.1, cv_nobs=3, cv_treat=True, cv_donut=0,
-    criterion="mspe",
+    criterion="mspe", cv_rule="min",
     se=False, vartype="bootstrap", nboots=200, alpha=0.05,
-    tol=1e-7, max_iter=5000, min_T0=1, max_missing=1.0, normalize=False,
+    tol=1e-7, max_iter=5000,
+    min_T0=1, min_T0_strict=False, max_missing=1.0, normalize=False,
     Z=None, Q=None,
     device="cpu", n_jobs=-1, seed=None,
 ) -> FectResult
@@ -48,15 +65,20 @@ fect(
 | `CV` | `bool` | `True` | Cross-validate |
 | `k` | `int` | `10` | CV folds |
 | `cv_prop` | `float` | `0.1` | Fraction of cells masked per CV fold |
+| `cv_nobs` | `int` | `3` | Consecutive within-unit observations to mask together during CV |
+| `cv_treat` | `bool` | `True` | If `True`, CV masks eligible pre-treatment cells from ever-treated units; if `False`, it masks all observed control cells |
+| `cv_donut` | `int` | `0` | Exclude this many periods around treatment onset from CV evaluation |
 | `criterion` | `str` | `"mspe"` | `"mspe"`, `"gmspe"`, `"mad"` |
+| `cv_rule` | `str` | `"min"` | `"min"` selects the strict minimum validation score; `"onepct"` selects the simpler candidate within 1% of best score |
 | `se` | `bool` | `False` | Compute standard errors |
 | `vartype` | `str` | `"bootstrap"` | `"bootstrap"` or `"jackknife"` |
 | `nboots` | `int` | `200` | Bootstrap replications |
 | `alpha` | `float` | `0.05` | Significance level |
 | `tol` | `float` | `1e-7` | EM convergence tolerance |
 | `max_iter` | `int` | `5000` | Max EM iterations |
-| `min_T0` | `int` | `1` | Minimum pre-treatment periods per unit |
-| `max_missing` | `float` | `1.0` | Max fraction missing per unit |
+| `min_T0` | `int` | `1` | Minimum untreated/pre-treatment observed periods; default applies to treated/reversal units |
+| `min_T0_strict` | `bool` | `False` | If `True`, apply `min_T0` to controls too, matching conservative R `fect` sparse-panel filtering |
+| `max_missing` | `float` | `1.0` | Max fraction missing per unit; units with zero observed outcomes are always dropped |
 | `normalize` | `bool` | `False` | Normalize outcome by its standard deviation |
 | `Z`, `Q` | `list[str]` | `None` | Not implemented; raises `NotImplementedError` when supplied |
 | `device` | `str` | `"cpu"` | `"cpu"` or `"gpu"` (requires CuPy) |
@@ -85,9 +107,9 @@ Returned by `fect()`.
 | `method` | `str` | Estimation method used |
 | `r_cv` | `int \| None` | Selected number of factors |
 | `lambda_cv` | `float \| None` | Selected MC penalty |
-| `att_avg` | `float` | Overall average treatment effect on treated |
-| `att_avg_unit` | `float` | Unit-averaged ATT |
-| `att_on` | `np.ndarray` | Dynamic ATT by relative time |
+| `att_avg` | `float` | Overall ATT over observed treated outcome cells |
+| `att_avg_unit` | `float` | Unit-averaged ATT over units with observed treated outcome cells |
+| `att_on` | `np.ndarray` | Dynamic ATT by relative time, using observed cells only |
 | `time_on` | `np.ndarray` | Relative time indices |
 | `count_on` | `np.ndarray` | Observations per relative time |
 | `att_off` | `np.ndarray \| None` | Exit-effect ATT (treatment reversal) |
@@ -100,8 +122,8 @@ Returned by `fect()`.
 | `factors` | `np.ndarray \| None` | `(T, r)` factors (IFE) |
 | `loadings` | `np.ndarray \| None` | `(N, r)` loadings (IFE) |
 | `Y_ct` | `np.ndarray` | `(T, N)` counterfactual outcome matrix |
-| `eff` | `np.ndarray` | `(T, N)` individual treatment effects |
-| `residuals` | `np.ndarray` | `(T, N)` residual matrix |
+| `eff` | `np.ndarray` | `(T, N)` raw effect matrix `Y - Y_ct`; use `panel.I` to identify observed cells |
+| `residuals` | `np.ndarray` | `(T, N)` residual matrix on observed fitting cells |
 | `sigma2` | `float` | Residual variance |
 | `IC`, `PC` | `float` | Information / Panel criterion |
 | `rmse` | `float` | Root mean squared error |

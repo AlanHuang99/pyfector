@@ -11,7 +11,9 @@ import polars as pl
 import pytest
 
 import pyfector
-from pyfector.cv import _make_cv_folds
+from pyfector.cv import _make_cv_folds, _select_best
+from pyfector.fect import _compute_effects
+from pyfector.panel import prepare_panel
 from conftest import _simulate_panel
 
 
@@ -205,6 +207,130 @@ class TestInputs:
                 run = run + 1 if value else 0
                 has_run = has_run or run >= 2
         assert has_run
+
+
+class TestCVSelection:
+    def test_default_rule_returns_lowest_score_candidate(self):
+        scores = {
+            0: {"mspe": 1.02},
+            1: {"mspe": 1.005},
+            2: {"mspe": 1.0},
+        }
+        assert _select_best(scores, [0, 1, 2], "mspe") == 2
+
+    def test_min_rule_returns_lowest_score_candidate(self):
+        scores = {
+            0: {"mspe": 1.02},
+            1: {"mspe": 1.005},
+            2: {"mspe": 1.0},
+        }
+        assert _select_best(scores, [0, 1, 2], "mspe", cv_rule="min") == 2
+
+    def test_onepct_rule_prefers_lower_rank_within_slack(self):
+        scores = {
+            0: {"mspe": 1.02},
+            1: {"mspe": 1.005},
+            2: {"mspe": 1.0},
+            3: {"mspe": 1.2},
+        }
+        selected = _select_best(scores, [0, 1, 2, 3], "mspe", cv_rule="onepct")
+        assert selected == 1
+
+    def test_onepct_rule_prefers_larger_lambda_within_slack(self):
+        scores = {
+            10.0: {"mspe": 1.02},
+            5.0: {"mspe": 1.005},
+            2.0: {"mspe": 1.0},
+            1.0: {"mspe": 1.2},
+        }
+        selected = _select_best(scores, [10.0, 5.0, 2.0, 1.0], "mspe", cv_rule="onepct")
+        assert selected == 5.0
+
+    def test_onepct_rule_uses_global_best_threshold(self):
+        scores = {
+            0: {"mspe": 10.0},
+            1: {"mspe": 9.95},
+            2: {"mspe": 9.89},
+        }
+        assert _select_best(scores, [0, 1, 2], "mspe", cv_rule="onepct") == 1
+
+    def test_invalid_cv_rule_raises(self):
+        scores = {0: {"mspe": 1.0}}
+        with pytest.raises(ValueError, match="cv_rule"):
+            _select_best(scores, [0], "mspe", cv_rule="bad")
+
+    def test_1se_rule_is_not_accepted(self):
+        scores = {0: {"mspe": 1.0}}
+        with pytest.raises(ValueError, match="cv_rule"):
+            _select_best(scores, [0], "mspe", cv_rule="1se")
+
+
+class TestPanelFiltering:
+    def test_min_T0_strict_filters_sparse_controls(self):
+        rows = []
+        y_values = {
+            0: [1.0, 2.0, 4.0, 5.0],
+            1: [10.0, np.nan, np.nan, np.nan],
+            2: [np.nan, np.nan, np.nan, np.nan],
+            3: [2.0, 2.5, np.nan, np.nan],
+        }
+        d_values = {
+            0: [0, 0, 1, 1],
+            1: [0, 0, 0, 0],
+            2: [0, 0, 0, 0],
+            3: [0, 0, 0, 0],
+        }
+        for unit in range(4):
+            for time in range(4):
+                rows.append({
+                    "unit": unit,
+                    "time": time,
+                    "Y": y_values[unit][time],
+                    "D": d_values[unit][time],
+                })
+        df = pl.DataFrame(rows)
+
+        permissive = prepare_panel(
+            df, Y="Y", D="D", index=("unit", "time"),
+            min_T0=2, min_T0_strict=False,
+        )
+        strict = prepare_panel(
+            df, Y="Y", D="D", index=("unit", "time"),
+            min_T0=2, min_T0_strict=True,
+        )
+
+        assert permissive.unit_ids.tolist() == [0, 1, 3]
+        assert strict.unit_ids.tolist() == [0, 3]
+
+    def test_missing_treated_outcomes_do_not_enter_att(self):
+        eff = np.array([
+            [0.1],
+            [2.0],
+            [-99.0],
+        ])
+        D = np.array([
+            [0.0],
+            [1.0],
+            [1.0],
+        ])
+        T_on = np.array([
+            [-1.0],
+            [0.0],
+            [1.0],
+        ])
+        I = np.array([
+            [1.0],
+            [1.0],
+            [0.0],
+        ])
+
+        att_avg, att_on, time_on, count_on, att_avg_unit = _compute_effects(eff, D, T_on, I)
+
+        assert att_avg == 2.0
+        assert att_avg_unit == 2.0
+        assert time_on.tolist() == [-1.0, 0.0]
+        assert att_on.tolist() == [0.1, 2.0]
+        assert count_on.tolist() == [1, 1]
 
 
 # ---------------------------------------------------------------------------

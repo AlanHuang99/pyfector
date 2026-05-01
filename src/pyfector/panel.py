@@ -13,8 +13,9 @@ Responsibilities
   ``index`` columns; original identifiers are preserved on ``PanelData``.
 * Build the outcome matrix ``Y``, treatment indicator ``D``, observation
   indicator ``I`` (1 if present, 0 if missing), and the control mask
-  ``II = I * (1 - D)``.  Missing ``Y`` entries are replaced by 0 — missingness
-  is carried entirely by ``I``.
+  ``II = I * (1 - D)``.  Missing ``Y`` entries are stored as a 0 placeholder;
+  missingness is carried by ``I`` and the MC EM loop overwrites missing cells
+  with model imputations before using them.
 * Build the optional covariate tensor ``X`` of shape ``(T, N, p)`` and the
   weight matrix ``W`` of shape ``(T, N)``.
 * Compute relative event time ``T_on`` (treatment onset) and, for reversal
@@ -30,6 +31,12 @@ Conventions
 * Matrices are row-major ``(T, N)`` with ``float64`` elements.
 * ``force`` encodes the additive fixed-effects choice: ``0 = none``,
   ``1 = unit``, ``2 = time``, ``3 = two-way``.
+* Missing raw outcomes are not zero-valued observations.  The 0 in ``Y`` is
+  only a dense-array placeholder, while ``I`` defines which cells enter the
+  fitting objective and treatment-effect averages.
+* Units with no observed outcome are dropped even when ``max_missing=1.0``;
+  they provide no untreated fitting information and no observed treated
+  outcome for ATT construction.
 * ``T_on`` is ``NaN`` for never-treated units and for always-treated units
   (no identifiable event).  For treated units, the first observed switch
   from ``D == 0`` to ``D == 1`` defines the reference period and
@@ -97,6 +104,7 @@ def prepare_panel(
     W: str | None = None,
     group: str | None = None,
     min_T0: int = 1,
+    min_T0_strict: bool = False,
     max_missing: float = 1.0,
 ) -> PanelData:
     """Convert long-format data to panel matrices.
@@ -118,9 +126,16 @@ def prepare_panel(
     group : str, optional
         Column name for cohort/group variable.
     min_T0 : int
-        Minimum pre-treatment periods required per unit.
+        Minimum untreated/pre-treatment observed periods. By default this is
+        enforced only for treated and treatment-reversal units.
+    min_T0_strict : bool
+        If True, enforce ``min_T0`` on all units, including controls. If False,
+        controls are kept regardless of ``min_T0`` as long as they have at
+        least one observed outcome and satisfy ``max_missing``.
     max_missing : float
-        Maximum fraction of missing observations per unit (0-1).
+        Maximum fraction of missing observations per unit (0-1). A value of
+        1.0 permits sparse units, but units with zero observed outcomes are
+        always removed.
     """
     unit_col, time_col = index
     X = X or []
@@ -169,7 +184,9 @@ def prepare_panel(
         for k, xname in enumerate(X):
             X_mat[t_idx, u_idx, k] = df[xname].to_numpy().astype(np.float64)
 
-    # Replace NaN in Y with 0 (missing cells tracked by I)
+    # Initialize missing outcome cells with a storage placeholder. The
+    # observation mask I carries missingness; MC EM iterations overwrite
+    # I == 0 cells with current model imputations before using them.
     Y_mat = np.nan_to_num(Y_mat, nan=0.0)
 
     # Control indicator: observed AND not treated
@@ -199,15 +216,32 @@ def prepare_panel(
     # --- Vectorised unit filters ---
     keep = np.ones(N, dtype=bool)
 
-    # Min pre-treatment periods (only treated / reversal units have the
-    # "pre-treatment" concept; controls trivially satisfy min_T0).
+    # Units with no observed outcome cannot contribute to the untreated
+    # fitting objective or to observed treated effects. Drop them before
+    # applying estimand-specific min_T0 rules.
+    observed_counts = I_mat.sum(axis=0)                              # (N,)
+    keep &= observed_counts > 0
+
+    # Min untreated/pre-treatment periods. The default preserves historical
+    # pyfector behavior: only treated / reversal units are filtered. Strict
+    # mode also requires controls to have enough observed untreated cells,
+    # matching R fect's more conservative sparse-panel handling.
     pre_periods = (II_mat > 0).sum(axis=0)                          # (N,)
-    treated_mask = (unit_type == 2) | (unit_type == 3)
-    keep &= ~(treated_mask & (pre_periods < min_T0))
+    if min_T0_strict:
+        keep &= pre_periods >= min_T0
+    else:
+        treated_mask = (unit_type == 2) | (unit_type == 3)
+        keep &= ~(treated_mask & (pre_periods < min_T0))
 
     # Max missing (fraction observed must exceed 1 - max_missing)
     obs_rate = I_mat.mean(axis=0)                                   # (N,)
     keep &= obs_rate >= (1.0 - max_missing)
+
+    if not np.any(keep):
+        raise ValueError(
+            "All units were removed by missing-outcome filters. "
+            "Check missing Y values, min_T0, min_T0_strict, and max_missing."
+        )
 
     if not np.all(keep):
         kept_idx = np.where(keep)[0]

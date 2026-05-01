@@ -19,13 +19,12 @@ pip install -e ".[dev]"
 
 Optional extras: `pip install pyfector[gpu]` (CuPy), `pip install pyfector[pandas]`.
 
-## What's New in 0.1.4
+## What's New in 0.1.5
 
-- Fixed bootstrap inference for panels where treated observations can have missing outcomes. Overall bootstrap ATT, confidence intervals, and p-values now use the same observed-cell mask as point estimation.
-- Improved matrix-completion performance on rectangular panels with a Gram-matrix SVD shortcut. On the GHA benchmark panel, the full MC pipeline with 500 bootstraps completed in 10.38 seconds on the test machine.
-- Changed the default `n_jobs` to `-1` so CV and bootstrap use all available CPUs unless a worker count is supplied.
-- Made `cv_nobs` affect CV masking through within-unit block masks.
-- Unsupported `group`, `Z`, and `Q` arguments now raise `NotImplementedError` instead of being silently ignored.
+- Made the cross-validation default paper-faithful: `cv_rule="min"` selects the lowest validation score. The one-percent slack rule is still available as `cv_rule="onepct"` for conservative model-complexity sensitivity checks.
+- Removed obsolete CV-rule compatibility spelling; accepted CV rules are now only `"min"` and `"onepct"`.
+- Clarified missing-outcome handling: raw missing `Y` cells are never treated as zero-valued observations and do not enter ATT averages; all-missing units are dropped.
+- Expanded API documentation with the paper-first design policy, CV-rule rationale, and sparse-panel estimand implications.
 
 ## Quick Start
 
@@ -71,7 +70,28 @@ Nuclear-norm-penalized matrix completion of the counterfactual matrix. Penalty `
 
 Experimental complex fixed effects. Public `Z`/`Q` interaction arguments are not implemented yet and raise `NotImplementedError` instead of being silently ignored.
 
-Cross-validation masks a fraction `cv_prop` of control cells and picks `r` (IFE) or `lam` (MC) by prediction error (`mspe`, `gmspe`, or `mad`).
+Cross-validation masks a fraction `cv_prop` of control cells and scores candidates by prediction error (`mspe`, `gmspe`, or `mad`). By default, `cv_rule="min"` follows the papers and selects the strict minimum-score candidate. Use `cv_rule="onepct"` to select the simpler candidate within 1% of the best score (lower `r` for IFE, higher `lam` for MC).
+
+## Design choices
+
+pyfector is paper-faithful first. When the published counterfactual-estimator papers and historical R package behavior differ, the default follows the paper and compatibility behavior is exposed through explicit options.
+
+### Cross-validation rule
+
+The papers describe choosing `r` or `lam` by a prespecified validation metric such as MSPE. Therefore `cv_rule="min"` is the default. The `onepct` rule is useful as a sensitivity check because it avoids adding flexibility for tiny validation gains, but it is a heuristic rather than the paper's core selection criterion.
+
+### Missing outcomes and the estimand
+
+pyfector distinguishes two kinds of missingness:
+
+| State | How pyfector treats it |
+|-------|------------------------|
+| Treated cells, where `D == 1` | Treated status makes untreated potential outcomes unobserved; pyfector imputes `Y_ct = Y(0)` for these cells. |
+| Raw missing outcome, where input `Y` is null | The outcome is not observed. The cell is excluded from fitting and from ATT aggregation. |
+
+Internally, missing `Y` cells are stored as `0.0` only as a dense-array placeholder. The observation mask `I` carries missingness, and estimators use `I`/`II` to decide which cells are observed. A missing treated outcome may receive a model counterfactual, but it does not enter `att_avg`, `att_on`, or bootstrap/jackknife ATT calculations because the treated potential outcome `Y(1)` was not observed.
+
+For unit filtering, the default estimand is the ATT over the matched panel's observed treated outcome cells, using all available observed untreated outcomes to fit the counterfactual model. Controls are not required to satisfy `min_T0` by default, so sparse controls can still help estimate the response surface. Units with no observed outcome at all are always dropped. Set `min_T0_strict=True` to require controls to satisfy `min_T0` as well; this is the conservative R-package-style sparse-panel behavior and changes the estimand toward always-active units.
 
 ---
 
@@ -82,10 +102,14 @@ Cross-validation masks a fraction `cv_prop` of control cells and picks `r` (IFE)
 ```python
 fect(
     data, Y, D, index,
-    *, X=None, W=None, method="ife", force="two-way",
-    r=0, lam=None, nlambda=10, CV=True, k=10, cv_prop=0.1, criterion="mspe",
+    *, X=None, W=None, group=None, method="ife", force="two-way",
+    r=0, lam=None, nlambda=10, CV=True, k=10, cv_prop=0.1,
+    cv_nobs=3, cv_treat=True, cv_donut=0, criterion="mspe",
+    cv_rule="min",
     se=False, vartype="bootstrap", nboots=200, alpha=0.05,
-    tol=1e-7, max_iter=5000, min_T0=1, normalize=False,
+    tol=1e-7, max_iter=5000, min_T0=1, min_T0_strict=False,
+    max_missing=1.0, normalize=False,
+    Z=None, Q=None,
     device="cpu", n_jobs=-1, seed=None,
 ) -> FectResult
 ```
@@ -98,21 +122,31 @@ fect(
 | `index` | `(str, str)` | required | `(unit_id, time)` column names |
 | `X` | `list[str]` | `None` | Time-varying covariate columns |
 | `W` | `str` | `None` | Observation weight column |
-| `method` | `str` | `"ife"` | `"fe"`, `"ife"`, `"mc"`, `"cfe"` |
+| `group` | `str` | `None` | Not implemented; raises `NotImplementedError` when supplied |
+| `method` | `str` | `"ife"` | `"fe"`, `"ife"`, `"mc"`, `"cfe"`, `"both"` |
 | `force` | `str` | `"two-way"` | `"none"`, `"unit"`, `"time"`, `"two-way"` |
 | `r` | `int` or `(int, int)` | `0` | Number of factors; tuple triggers CV over range |
 | `lam` | `float` | `None` | MC nuclear-norm penalty; `None` selects by CV |
+| `nlambda` | `int` | `10` | Grid size for MC CV |
 | `CV` | `bool` | `True` | Cross-validate over `r` or `lam` |
 | `k` | `int` | `10` | CV folds |
 | `cv_prop` | `float` | `0.1` | Fraction of control cells masked per CV fold |
+| `cv_nobs` | `int` | `3` | Consecutive within-unit observations to mask together during CV |
+| `cv_treat` | `bool` | `True` | If `True`, CV masks eligible pre-treatment cells from ever-treated units; if `False`, it masks all observed control cells |
+| `cv_donut` | `int` | `0` | Exclude this many periods around treatment onset from CV evaluation |
 | `criterion` | `str` | `"mspe"` | CV loss: `"mspe"`, `"gmspe"`, `"mad"` |
+| `cv_rule` | `str` | `"min"` | `"min"` selects the strict minimum validation score; `"onepct"` selects the simpler candidate within 1% of the best score |
 | `se` | `bool` | `False` | Compute standard errors |
 | `vartype` | `str` | `"bootstrap"` | `"bootstrap"` or `"jackknife"` |
 | `nboots` | `int` | `200` | Bootstrap replications |
+| `alpha` | `float` | `0.05` | Significance level for intervals and tests |
 | `tol` | `float` | `1e-7` | EM convergence tolerance |
 | `max_iter` | `int` | `5000` | Max EM iterations |
-| `min_T0` | `int` | `1` | Minimum pre-treatment periods required per unit |
+| `min_T0` | `int` | `1` | Minimum untreated/pre-treatment observed periods; default applies to treated/reversal units |
+| `min_T0_strict` | `bool` | `False` | If `True`, apply `min_T0` to controls too, matching conservative R `fect` sparse-panel filtering |
+| `max_missing` | `float` | `1.0` | Maximum missing-outcome fraction per unit; units with zero observed outcomes are always dropped |
 | `normalize` | `bool` | `False` | Normalize outcome by standard deviation |
+| `Z`, `Q` | `list[str]` | `None` | Not implemented; raises `NotImplementedError` when supplied |
 | `device` | `str` | `"cpu"` | `"cpu"` or `"gpu"` (requires `pyfector[gpu]`) |
 | `n_jobs` | `int` | `-1` | Parallel workers for CV / bootstrap; `-1` uses all CPUs |
 | `seed` | `int` | `None` | Random seed |
@@ -136,14 +170,14 @@ Long-format panel with one row per unit per period.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `att_avg` | `float` | Overall ATT (weighted by cell counts) |
-| `att_avg_unit` | `float` | Unit-averaged ATT |
-| `att_on` | `ndarray` | Dynamic ATT by relative time |
+| `att_avg` | `float` | Overall ATT over observed treated outcome cells |
+| `att_avg_unit` | `float` | Unit-averaged ATT over units with observed treated outcome cells |
+| `att_on` | `ndarray` | Dynamic ATT by relative time, using observed cells only |
 | `time_on` | `ndarray` | Relative time indices |
 | `count_on` | `ndarray` | Observation count per relative time |
 | `beta` | `ndarray` | Covariate coefficients |
 | `Y_ct` | `ndarray` | `(T, N)` counterfactual outcome matrix |
-| `eff` | `ndarray` | `(T, N)` treatment effect matrix |
+| `eff` | `ndarray` | `(T, N)` raw effect matrix `Y - Y_ct`; use `panel.I` to identify observed cells |
 | `factors` | `ndarray` | `(T, r)` estimated factors (IFE) |
 | `loadings` | `ndarray` | `(N, r)` estimated loadings (IFE) |
 | `sigma2` | `float` | Residual variance |

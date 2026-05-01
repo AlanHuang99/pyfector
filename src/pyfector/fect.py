@@ -18,7 +18,10 @@ and the :class:`FectResult` dataclass that packages its output.
    method (``fe``, ``ife``, ``mc``, or ``cfe``).
 5. Treatment effects are computed from ``eff = Y - Y_ct``; the overall
    ATT and dynamic ATT by relative event time are derived in
-   :func:`_compute_effects` via :func:`numpy.bincount`.
+   :func:`_compute_effects` via :func:`numpy.bincount`.  Raw missing
+   outcomes remain excluded from effect averages; model imputations are
+   counterfactual predictions, not substitutes for unobserved treated
+   outcomes.
 6. When ``se=True`` the requested inference routine
    (``bootstrap`` or ``jackknife``) from :mod:`pyfector.inference` is
    called with a closure that re-runs the EM loop on resampled units.
@@ -198,6 +201,7 @@ def fect(
     cv_treat: bool = True,
     cv_donut: int = 0,
     criterion: str = "mspe",
+    cv_rule: Literal["min", "onepct"] = "min",
     se: bool = False,
     vartype: Literal["bootstrap", "jackknife"] = "bootstrap",
     nboots: int = 200,
@@ -205,6 +209,7 @@ def fect(
     tol: float = 1e-7,
     max_iter: int = 5000,
     min_T0: int = 1,
+    min_T0_strict: bool = False,
     max_missing: float = 1.0,
     normalize: bool = False,
     # CFE-specific
@@ -217,7 +222,28 @@ def fect(
 ) -> FectResult:
     """Estimate counterfactual treatment effects for panel data.
 
-    This is the main entry point — equivalent to R fect's ``fect()`` function.
+    This is the main Python entry point for the counterfactual estimator
+    workflow.  Where the paper and the historical R package differ,
+    pyfector defaults to the paper's statistical definition and exposes
+    R-package-style behavior through explicit options.
+
+    Missing outcome policy
+    ----------------------
+    pyfector distinguishes raw missing outcomes from counterfactual
+    missingness caused by treatment.  Observed untreated cells
+    (``D == 0`` and non-missing ``Y``) fit the response surface.  Observed
+    treated cells (``D == 1`` and non-missing ``Y``) contribute to ATT as
+    ``Y - Y_ct``.  If a treated outcome is missing in the input data, the
+    model can still produce a counterfactual ``Y_ct`` for that cell, but
+    the cell is not counted in ``att_avg`` or ``att_on`` because the
+    treated potential outcome was not observed.
+
+    By default, ``min_T0`` is enforced only for treated and reversal
+    units.  Sparse controls are retained if they have at least one
+    observed outcome, because they may still inform the low-rank response
+    surface.  Set ``min_T0_strict=True`` to require controls to satisfy
+    ``min_T0`` too, matching the more conservative R fect sparse-panel
+    behavior.
 
     Parameters
     ----------
@@ -229,6 +255,11 @@ def fect(
         Column names for (unit_id, time_period).
     X : list of str, optional
         Time-varying covariates.
+    W : str, optional
+        Observation weight column.
+    group : str, optional
+        Reserved for grouped estimation. Currently raises
+        ``NotImplementedError`` when supplied.
     method : {"fe", "ife", "mc", "cfe", "both"}
         Estimation method.
     force : {"none", "unit", "time", "two-way"}
@@ -237,8 +268,58 @@ def fect(
         Number of factors.  If tuple, CV selects from range.
     lam : float, optional
         Nuclear norm penalty for MC.  If None with CV=True, auto-selected.
+    nlambda : int
+        Number of automatically generated lambda candidates for MC CV.
+    CV : bool
+        If True, cross-validate over ``r`` for IFE when ``r`` is a tuple,
+        or over ``lam`` for MC when ``lam`` is None.
+    k : int
+        Number of CV folds.
+    cv_prop : float
+        Fraction of eligible observed control cells masked per CV fold.
+    cv_nobs : int
+        Number of consecutive within-unit observations to mask as a block.
+    cv_treat : bool
+        If True, restrict CV masks to pre-treatment cells of ever-treated
+        units. If False, use all observed control cells.
+    cv_donut : int
+        Exclude this many periods around treatment onset from CV evaluation.
+    criterion : {"mspe", "gmspe", "mad"}
+        Cross-validation loss.
+    cv_rule : {"min", "onepct"}
+        CV selection rule. ``"min"`` chooses the strict minimum-score
+        candidate and is the paper-faithful default. ``"onepct"`` chooses
+        the simplest candidate within 1% of the best score (lower ``r`` for
+        IFE, higher ``lam`` for MC).
     se : bool
         Compute standard errors via bootstrap/jackknife.
+    vartype : {"bootstrap", "jackknife"}
+        Inference method when ``se=True``.
+    nboots : int
+        Number of bootstrap replications. Ignored for jackknife.
+    alpha : float
+        Significance level for confidence intervals and tests.
+    tol : float
+        EM convergence tolerance for final point estimation.
+    max_iter : int
+        Maximum EM iterations.
+    min_T0 : int
+        Minimum untreated/pre-treatment observed periods. By default this is
+        enforced only for treated and treatment-reversal units.
+    min_T0_strict : bool
+        If True, enforce ``min_T0`` on all units, including controls. This
+        matches R fect's conservative handling of sparse control rows.
+    max_missing : float
+        Maximum missing-outcome fraction per unit, in ``[0, 1]``. Units with
+        no observed outcomes are always dropped, regardless of this threshold,
+        because they provide neither fitting information nor observed treated
+        effects.
+    normalize : bool
+        If True, estimate on an outcome standardized by its observed standard
+        deviation, then transform effects back to the original scale.
+    Z, Q : list of str, optional
+        Reserved CFE interaction arguments. Currently raise
+        ``NotImplementedError`` when supplied.
     device : {"cpu", "gpu"}
         Compute device.
     n_jobs : int, optional
@@ -256,6 +337,14 @@ def fect(
         raise NotImplementedError("The `group` argument is not implemented yet.")
     if Z is not None or Q is not None:
         raise NotImplementedError("The `Z` and `Q` CFE interaction arguments are not implemented yet.")
+    if criterion not in {"mspe", "gmspe", "mad"}:
+        raise ValueError("criterion must be 'mspe', 'gmspe', or 'mad'")
+    if cv_rule not in {"min", "onepct"}:
+        raise ValueError("cv_rule must be 'min' or 'onepct'")
+    if min_T0 < 0:
+        raise ValueError("min_T0 must be non-negative")
+    if not 0.0 <= max_missing <= 1.0:
+        raise ValueError("max_missing must be between 0 and 1")
 
     # Map force string to int
     force_map = {"none": 0, "unit": 1, "time": 2, "two-way": 3}
@@ -264,7 +353,8 @@ def fect(
     # Prepare panel data
     panel = prepare_panel(
         data, Y=Y, D=D, index=index, X=X, W=W,
-        group=group, min_T0=min_T0, max_missing=max_missing,
+        group=group, min_T0=min_T0, min_T0_strict=min_T0_strict,
+        max_missing=max_missing,
     )
 
     # Move to device
@@ -297,7 +387,8 @@ def fect(
                 Y_mat, Y0, X_mat, I_mat, II_mat, D_mat, W_mat, beta0,
                 force=force_int, r_range=r, k=k, cv_prop=cv_prop,
                 cv_nobs=cv_nobs, cv_treat=cv_treat, cv_donut=cv_donut,
-                criterion=criterion, tol=tol, max_iter=max_iter,
+                criterion=criterion, cv_rule=cv_rule,
+                tol=tol, max_iter=max_iter,
                 n_jobs=n_jobs, seed=seed,
             )
             r_cv = cv_result.best_r
@@ -310,7 +401,8 @@ def fect(
                 Y_mat, Y0, X_mat, I_mat, II_mat, D_mat, W_mat, beta0,
                 force=force_int, nlambda=nlambda, k=k, cv_prop=cv_prop,
                 cv_nobs=cv_nobs, cv_treat=cv_treat, cv_donut=cv_donut,
-                criterion=criterion, tol=tol, max_iter=max_iter,
+                criterion=criterion, cv_rule=cv_rule,
+                tol=tol, max_iter=max_iter,
                 n_jobs=n_jobs, seed=seed,
             )
             lambda_cv = cv_result.best_lambda
@@ -346,7 +438,8 @@ def fect(
                 Y_mat, Y0, X_mat, I_mat, II_mat, D_mat, W_mat, beta0,
                 force=force_int, r_range=r, k=k, cv_prop=cv_prop,
                 cv_nobs=cv_nobs, cv_treat=cv_treat, cv_donut=cv_donut,
-                criterion=criterion, tol=tol, max_iter=max_iter,
+                criterion=criterion, cv_rule=cv_rule,
+                tol=tol, max_iter=max_iter,
                 n_jobs=n_jobs, seed=seed,
             )
             r_cv = cv_result.best_r
@@ -423,6 +516,11 @@ def fect(
 
 def _compute_effects(eff, D, T_on, I):
     """Compute overall ATT, per-unit ATT, and dynamic ATT by event time.
+
+    ATT averages are defined only over observed outcome cells.  A missing
+    raw treated outcome has no observed ``Y(1)``, so it is excluded even
+    though the estimator may have produced a counterfactual ``Y_ct`` for
+    that matrix position.
 
     Dynamic ATT grouping is done with :func:`numpy.bincount` so the cost
     is O(n_observed_ever_treated_cells) regardless of the number of

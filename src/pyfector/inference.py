@@ -341,11 +341,16 @@ def _compute_att(
 ) -> tuple[float, np.ndarray, np.ndarray]:
     """Compute overall and dynamic ATT from the effect matrix.
 
-    Uses ``np.bincount`` for the event-time grouping so the cost is
-    linear in the number of observed cells.  When ``time_on`` is
-    supplied the caller's grid is preserved exactly so bootstrap
-    replicates can be stacked into a ``(n_periods, nboots)`` matrix even
-    if some replicates happen to not observe every event time.
+    Missing raw outcomes are excluded by ``I``.  This keeps bootstrap and
+    jackknife replicates aligned with point estimation: a model-imputed
+    counterfactual can exist at a missing treated cell, but that cell has
+    no observed treated outcome and therefore cannot enter the ATT.
+
+    Uses ``np.bincount`` for the event-time grouping so the cost is linear
+    in the number of observed cells.  When ``time_on`` is supplied the
+    caller's grid is preserved exactly so bootstrap replicates can be
+    stacked into a ``(n_periods, nboots)`` matrix even if some replicates
+    happen to not observe every event time.
     """
     if I is not None and np.shape(I) != np.shape(D) and time_on is None:
         time_on = np.asarray(I)
