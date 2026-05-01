@@ -19,6 +19,14 @@ pip install -e ".[dev]"
 
 Optional extras: `pip install pyfector[gpu]` (CuPy), `pip install pyfector[pandas]`.
 
+## What's New in 0.1.4
+
+- Fixed bootstrap inference for panels where treated observations can have missing outcomes. Overall bootstrap ATT, confidence intervals, and p-values now use the same observed-cell mask as point estimation.
+- Improved matrix-completion performance on rectangular panels with a Gram-matrix SVD shortcut. On the GHA benchmark panel, the full MC pipeline with 500 bootstraps completed in 10.38 seconds on the test machine.
+- Changed the default `n_jobs` to `-1` so CV and bootstrap use all available CPUs unless a worker count is supplied.
+- Made `cv_nobs` affect CV masking through within-unit block masks.
+- Unsupported `group`, `Z`, and `Q` arguments now raise `NotImplementedError` instead of being silently ignored.
+
 ## Quick Start
 
 ```python
