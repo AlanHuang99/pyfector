@@ -50,6 +50,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Literal
+import os
 
 import numpy as np
 
@@ -211,7 +212,7 @@ def fect(
     Q: list[str] | None = None,
     # Performance
     device: Literal["cpu", "gpu"] = "cpu",
-    n_jobs: int = 1,
+    n_jobs: int | None = -1,
     seed: int | None = None,
 ) -> FectResult:
     """Estimate counterfactual treatment effects for panel data.
@@ -240,14 +241,21 @@ def fect(
         Compute standard errors via bootstrap/jackknife.
     device : {"cpu", "gpu"}
         Compute device.
-    n_jobs : int
-        Parallel workers for CV and bootstrap.
+    n_jobs : int, optional
+        Parallel workers for CV and bootstrap. ``-1`` or ``None`` uses
+        all available CPUs.
     seed : int, optional
         Random seed for full reproducibility.
     """
     # Set device
     set_device(device)
     xp = get_backend()
+    n_jobs = _resolve_n_jobs(n_jobs)
+
+    if group is not None:
+        raise NotImplementedError("The `group` argument is not implemented yet.")
+    if Z is not None or Q is not None:
+        raise NotImplementedError("The `Z` and `Q` CFE interaction arguments are not implemented yet.")
 
     # Map force string to int
     force_map = {"none": 0, "unit": 1, "time": 2, "two-way": 3}
@@ -529,7 +537,7 @@ def _run_inference(
         if normalize and norm_factor != 1.0:
             eff = eff * norm_factor
 
-        return eff, to_numpy(D_sub), T_on_sub
+        return eff, to_numpy(D_sub), T_on_sub, to_numpy(I_sub)
 
     if vartype == "bootstrap":
         return bootstrap(
@@ -543,3 +551,12 @@ def _run_inference(
             to_numpy(panel.I), panel.T_on, panel.unit_type,
             alpha=alpha, n_jobs=n_jobs,
         )
+
+
+def _resolve_n_jobs(n_jobs: int | None) -> int:
+    """Normalize public n_jobs values before passing them to joblib."""
+    if n_jobs is None or n_jobs == -1:
+        return os.cpu_count() or 1
+    if n_jobs == 0 or n_jobs < -1:
+        raise ValueError("n_jobs must be a positive integer, -1, or None")
+    return int(n_jobs)

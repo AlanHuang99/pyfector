@@ -61,7 +61,7 @@ Nuclear-norm-penalized matrix completion of the counterfactual matrix. Penalty `
 
 ### `method="cfe"` -- Complex fixed effects
 
-Unit/time-varying interactions with covariates `Z` and `Q`.
+Experimental complex fixed effects. Public `Z`/`Q` interaction arguments are not implemented yet and raise `NotImplementedError` instead of being silently ignored.
 
 Cross-validation masks a fraction `cv_prop` of control cells and picks `r` (IFE) or `lam` (MC) by prediction error (`mspe`, `gmspe`, or `mad`).
 
@@ -78,7 +78,7 @@ fect(
     r=0, lam=None, nlambda=10, CV=True, k=10, cv_prop=0.1, criterion="mspe",
     se=False, vartype="bootstrap", nboots=200, alpha=0.05,
     tol=1e-7, max_iter=5000, min_T0=1, normalize=False,
-    device="cpu", n_jobs=1, seed=None,
+    device="cpu", n_jobs=-1, seed=None,
 ) -> FectResult
 ```
 
@@ -106,7 +106,7 @@ fect(
 | `min_T0` | `int` | `1` | Minimum pre-treatment periods required per unit |
 | `normalize` | `bool` | `False` | Normalize outcome by standard deviation |
 | `device` | `str` | `"cpu"` | `"cpu"` or `"gpu"` (requires `pyfector[gpu]`) |
-| `n_jobs` | `int` | `1` | Parallel workers for CV / bootstrap |
+| `n_jobs` | `int` | `-1` | Parallel workers for CV / bootstrap; `-1` uses all CPUs |
 | `seed` | `int` | `None` | Random seed |
 
 ### Data format
@@ -205,7 +205,7 @@ Covariate coefficients agree to 6 decimal places. Comparison scripts are in `ben
 
 ## Performance notes
 
-Hot paths use vectorised numpy and a randomised truncated SVD for the interactive-FE update when `r << min(T, N)`. Cross-validation and bootstrap replications parallelise over `n_jobs` via joblib. GPU execution is available through `device="gpu"` when CuPy is installed. See [benchmarks/](benchmarks/) for reproducible timing scripts.
+Hot paths use vectorised numpy, a randomised truncated SVD for the interactive-FE update when `r << min(T, N)`, and a Gram-matrix SVD shortcut for rectangular matrix-completion panels. Cross-validation and bootstrap replications parallelise over `n_jobs` via joblib. GPU execution is available through `device="gpu"` when CuPy is installed. See [benchmarks/](benchmarks/) for reproducible timing scripts.
 
 ---
 

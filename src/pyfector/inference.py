@@ -84,6 +84,7 @@ def bootstrap(
         - eff: (T, N_sub) treatment effects
         - D_sub: (T, N_sub) treatment indicators
         - T_on_sub: (T, N_sub) relative time
+        - I_sub: (T, N_sub) observation indicators
     unit_type : (N,) array
         1=control, 2=treated, 3=reversal
     cluster : (N,) array, optional
@@ -102,8 +103,10 @@ def bootstrap(
     N_rev = len(reversal_idx)
 
     # Point estimate
-    eff_point, D_point, T_on_point = estimate_fn(np.arange(N))
-    att_avg_point, att_on_point, time_on = _compute_att(eff_point, D_point, T_on_point)
+    eff_point, D_point, T_on_point, I_point = _unpack_estimate(
+        estimate_fn(np.arange(N)), I
+    )
+    att_avg_point, att_on_point, time_on = _compute_att(eff_point, D_point, T_on_point, I_point)
 
     n_periods = len(time_on)
 
@@ -123,8 +126,10 @@ def bootstrap(
             unit_idx = np.concatenate([tr_sample, co_sample, rev_sample]).astype(int)
 
         try:
-            eff_b, D_b, T_on_b = estimate_fn(unit_idx)
-            att_avg_b, att_on_b, _ = _compute_att(eff_b, D_b, T_on_b, time_on)
+            eff_b, D_b, T_on_b, I_b = _unpack_estimate(
+                estimate_fn(unit_idx), I[:, unit_idx]
+            )
+            att_avg_b, att_on_b, _ = _compute_att(eff_b, D_b, T_on_b, I_b, time_on)
             return att_avg_b, att_on_b
         except Exception:
             return None, None
@@ -135,7 +140,7 @@ def bootstrap(
     if n_jobs == 1:
         results = [_one_boot(s) for s in boot_seeds]
     else:
-        results = Parallel(n_jobs=n_jobs, prefer="processes")(
+        results = Parallel(n_jobs=n_jobs, prefer="threads")(
             delayed(_one_boot)(s) for s in boot_seeds
         )
 
@@ -162,10 +167,13 @@ def bootstrap(
     att_on_se = np.nanstd(att_on_boot, axis=1, ddof=1)
     att_on_ci_lower = 2 * att_on_point - np.nanquantile(att_on_boot, 1 - alpha / 2, axis=1)
     att_on_ci_upper = 2 * att_on_point - np.nanquantile(att_on_boot, alpha / 2, axis=1)
-    # For p-values, count non-NaN entries
-    boot_ge_0 = np.nanmean(att_on_boot >= 0, axis=1)
-    boot_le_0 = np.nanmean(att_on_boot <= 0, axis=1)
+    valid_on = np.isfinite(att_on_boot)
+    valid_counts = valid_on.sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        boot_ge_0 = np.sum((att_on_boot >= 0) & valid_on, axis=1) / valid_counts
+        boot_le_0 = np.sum((att_on_boot <= 0) & valid_on, axis=1) / valid_counts
     att_on_pval = np.minimum(2 * boot_ge_0, np.minimum(2 * boot_le_0, 1.0))
+    att_on_pval[valid_counts == 0] = np.nan
 
     return InferenceResult(
         att_avg=att_avg_point,
@@ -203,15 +211,19 @@ def jackknife(
     N = Y.shape[1]
 
     # Point estimate
-    eff_point, D_point, T_on_point = estimate_fn(np.arange(N))
-    att_avg_point, att_on_point, time_on = _compute_att(eff_point, D_point, T_on_point)
+    eff_point, D_point, T_on_point, I_point = _unpack_estimate(
+        estimate_fn(np.arange(N)), I
+    )
+    att_avg_point, att_on_point, time_on = _compute_att(eff_point, D_point, T_on_point, I_point)
     n_periods = len(time_on)
 
     def _one_jack(j):
         idx = np.concatenate([np.arange(j), np.arange(j + 1, N)])
         try:
-            eff_j, D_j, T_on_j = estimate_fn(idx)
-            att_avg_j, att_on_j, _ = _compute_att(eff_j, D_j, T_on_j, time_on)
+            eff_j, D_j, T_on_j, I_j = _unpack_estimate(
+                estimate_fn(idx), I[:, idx]
+            )
+            att_avg_j, att_on_j, _ = _compute_att(eff_j, D_j, T_on_j, I_j, time_on)
             return att_avg_j, att_on_j
         except Exception:
             return None, None
@@ -219,7 +231,7 @@ def jackknife(
     if n_jobs == 1:
         results = [_one_jack(j) for j in range(N)]
     else:
-        results = Parallel(n_jobs=n_jobs, prefer="processes")(
+        results = Parallel(n_jobs=n_jobs, prefer="threads")(
             delayed(_one_jack)(j) for j in range(N)
         )
 
@@ -310,10 +322,21 @@ def permutation_test(
 # ATT computation helpers
 # ---------------------------------------------------------------------------
 
+def _unpack_estimate(result, fallback_I: np.ndarray):
+    """Accept old 3-tuple estimate closures and new 4-tuple closures."""
+    if len(result) == 3:
+        eff, D, T_on = result
+        return eff, D, T_on, fallback_I
+    if len(result) == 4:
+        return result
+    raise ValueError("estimate_fn must return (eff, D, T_on) or (eff, D, T_on, I)")
+
+
 def _compute_att(
     eff: np.ndarray,     # (T, N) effects
     D: np.ndarray,       # (T, N) treatment indicator
     T_on: np.ndarray,    # (T, N) relative time
+    I: np.ndarray | None = None,  # (T, N) observation indicator
     time_on: np.ndarray | None = None,
 ) -> tuple[float, np.ndarray, np.ndarray]:
     """Compute overall and dynamic ATT from the effect matrix.
@@ -324,12 +347,21 @@ def _compute_att(
     replicates can be stacked into a ``(n_periods, nboots)`` matrix even
     if some replicates happen to not observe every event time.
     """
-    treated_mask = D > 0
+    if I is not None and np.shape(I) != np.shape(D) and time_on is None:
+        time_on = np.asarray(I)
+        I = None
+
+    if I is None:
+        observed_mask = np.ones_like(D, dtype=bool)
+    else:
+        observed_mask = I > 0
+
+    treated_mask = (D > 0) & observed_mask
     n_treated = int(np.sum(treated_mask))
     att_avg = 0.0 if n_treated == 0 else float(np.sum(eff[treated_mask]) / n_treated)
 
     ever_treated = np.any(D > 0, axis=0)                            # (N,)
-    all_mask = np.broadcast_to(ever_treated[np.newaxis, :], T_on.shape)
+    all_mask = observed_mask & np.broadcast_to(ever_treated[np.newaxis, :], T_on.shape)
     T_on_flat = T_on[all_mask]
     eff_flat = eff[all_mask]
     valid = ~np.isnan(T_on_flat)

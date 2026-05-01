@@ -121,6 +121,13 @@ class TestPanelFE:
         FE = panel_FE(E, lam=0.0, hard=False)
         np.testing.assert_allclose(FE, E, atol=1e-6)
 
+    def test_rectangular_zero_lambda_identity(self):
+        """The Gram SVD shortcut should preserve exact SVT behavior."""
+        rng = np.random.default_rng(42)
+        E = rng.normal(0, 1, (12, 80))
+        FE = panel_FE(E, lam=0.0, hard=False)
+        np.testing.assert_allclose(FE, E, atol=1e-6)
+
 
 class TestDemean:
     """Test demeaning operations."""

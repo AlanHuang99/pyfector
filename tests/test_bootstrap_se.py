@@ -243,6 +243,36 @@ class TestDynamicSE:
 class TestBootstrapDistribution:
     """The bootstrap distribution should have reasonable statistical properties."""
 
+    def test_boot_distribution_ignores_missing_treated_cells(self):
+        """Balanced rows with missing treated outcomes should not enter avg boot ATT."""
+        rows = []
+        N, T = 20, 8
+        for j in range(N):
+            treated = j < 8
+            alpha = j / 20
+            for t in range(T):
+                d = int(treated and t >= 4)
+                y = 1 + alpha + 0.1 * t + 2 * d
+                if d and t in (5, 6):
+                    y = None
+                rows.append({"unit": j, "time": t, "Y": y, "D": d})
+
+        df = pl.DataFrame(rows)
+        result = pyfector.fect(
+            df, Y="Y", D="D", index=("unit", "time"),
+            method="fe", CV=False, se=True, nboots=50, seed=7, n_jobs=1,
+        )
+
+        boot_mean = float(np.mean(result.inference.att_avg_boot))
+        post = result.time_on >= 0
+        reaggregated = (
+            result.inference.att_on_boot[post] * result.count_on[post, None]
+        ).sum(axis=0) / result.count_on[post].sum()
+
+        assert abs(result.att_avg - 2.0) < 1e-4
+        assert abs(boot_mean - result.att_avg) < 1e-4
+        assert abs(float(reaggregated.mean()) - result.att_avg) < 1e-4
+
     def test_boot_distribution_centered(self):
         """Bootstrap ATT distribution should be roughly centered near point estimate."""
         panel = _simulate_panel(N=200, T=40, N_treated=80, r=0, delta=3.0, seed=42)

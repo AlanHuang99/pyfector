@@ -25,7 +25,7 @@ fect(
     se=False, vartype="bootstrap", nboots=200, alpha=0.05,
     tol=1e-7, max_iter=5000, min_T0=1, max_missing=1.0, normalize=False,
     Z=None, Q=None,
-    device="cpu", n_jobs=1, seed=None,
+    device="cpu", n_jobs=-1, seed=None,
 ) -> FectResult
 ```
 
@@ -39,7 +39,7 @@ fect(
 | `index` | `(str, str)` | required | `(unit_id, time)` column names |
 | `X` | `list[str]` | `None` | Time-varying covariates |
 | `W` | `str` | `None` | Observation weight column |
-| `group` | `str` | `None` | Optional group column |
+| `group` | `str` | `None` | Not implemented; raises `NotImplementedError` when supplied |
 | `method` | `str` | `"ife"` | `"fe"`, `"ife"`, `"mc"`, `"cfe"`, `"both"` |
 | `force` | `str` | `"two-way"` | `"none"`, `"unit"`, `"time"`, `"two-way"` |
 | `r` | `int` or `(int, int)` | `0` | Number of factors; tuple triggers CV |
@@ -58,9 +58,9 @@ fect(
 | `min_T0` | `int` | `1` | Minimum pre-treatment periods per unit |
 | `max_missing` | `float` | `1.0` | Max fraction missing per unit |
 | `normalize` | `bool` | `False` | Normalize outcome by its standard deviation |
-| `Z`, `Q` | `list[str]` | `None` | CFE interaction columns |
+| `Z`, `Q` | `list[str]` | `None` | Not implemented; raises `NotImplementedError` when supplied |
 | `device` | `str` | `"cpu"` | `"cpu"` or `"gpu"` (requires CuPy) |
-| `n_jobs` | `int` | `1` | Parallel workers |
+| `n_jobs` | `int` | `-1` | Parallel workers; `-1` uses all CPUs |
 | `seed` | `int` | `None` | Random seed |
 
 ### Methods

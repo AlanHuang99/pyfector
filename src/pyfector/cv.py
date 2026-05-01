@@ -93,15 +93,46 @@ def _make_cv_folds(
 
     rng_np = np.random.default_rng(int(rng.integers(2**31)) if hasattr(rng, 'integers') else 42)
 
-    for fold_i in range(k):
-        # Randomly sample cells to mask
-        chosen = rng_np.choice(n_eligible, size=min(rm_count, n_eligible), replace=False)
-        mask_rows = elig_rows[chosen]
-        mask_cols = elig_cols[chosen]
+    if n_eligible == 0:
+        raise ValueError("No eligible control observations for cross-validation")
 
-        # Build mask array
+    for fold_i in range(k):
         mask = np.zeros((T, N), dtype=bool)
-        mask[mask_rows, mask_cols] = True
+
+        if cv_nobs <= 1 or rm_count <= 2:
+            chosen = rng_np.choice(n_eligible, size=min(rm_count, n_eligible), replace=False)
+            mask[elig_rows[chosen], elig_cols[chosen]] = True
+        else:
+            # Match R fect's block-style CV more closely: hide short
+            # within-unit runs rather than only isolated cells.
+            while int(mask.sum()) < min(rm_count, n_eligible):
+                base = int(rng_np.integers(n_eligible))
+                row = int(elig_rows[base])
+                col = int(elig_cols[base])
+                stop = min(T, row + cv_nobs)
+                rows = np.arange(row, stop)
+                rows = rows[eligible_np[rows, col] > 0]
+                mask[rows, col] = True
+                if len(rows) == 0:
+                    mask[row, col] = True
+
+            selected = np.flatnonzero(mask.ravel())
+            if len(selected) > rm_count:
+                drop = rng_np.choice(selected, size=len(selected) - rm_count, replace=False)
+                mask.ravel()[drop] = False
+
+        # Keep every row and usable unit identifiable after masking.
+        II_after = to_numpy(II).copy()
+        II_after[mask] = 0
+        bad_rows = np.where(II_after.sum(axis=1) < 1)[0]
+        if len(bad_rows) > 0:
+            mask[bad_rows, :] = False
+            II_after = to_numpy(II).copy()
+            II_after[mask] = 0
+        orig_col_counts = to_numpy(II).sum(axis=0)
+        bad_cols = np.where((orig_col_counts > 0) & (II_after.sum(axis=0) < 1))[0]
+        if len(bad_cols) > 0:
+            mask[:, bad_cols] = False
 
         # Eval indices (same as mask, optionally excluding donut around treatment)
         eval_mask = mask.copy()

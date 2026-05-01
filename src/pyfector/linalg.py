@@ -106,6 +106,37 @@ def full_svd(M):
     return xp.linalg.svd(M, full_matrices=False)
 
 
+def _gram_svd(M):
+    """Economy SVD through the smaller Gram matrix for rectangular panels."""
+    xp = get_backend()
+    T, N = M.shape
+    dtype = M.dtype
+    eps = xp.finfo(dtype).eps if xp.issubdtype(dtype, xp.floating) else xp.finfo(xp.float64).eps
+
+    if T <= N:
+        vals, U = xp.linalg.eigh(M @ M.T)
+        order = xp.argsort(vals)[::-1]
+        vals = xp.maximum(vals[order], 0.0)
+        U = U[:, order]
+        s = xp.sqrt(vals)
+        nonzero = s > eps * max(T, N) * (s[0] if s.size else 1.0)
+        Vt = xp.zeros((T, N), dtype=dtype)
+        if xp.any(nonzero):
+            Vt[nonzero, :] = (U[:, nonzero].T @ M) / s[nonzero, None]
+        return U, s, Vt
+
+    vals, V = xp.linalg.eigh(M.T @ M)
+    order = xp.argsort(vals)[::-1]
+    vals = xp.maximum(vals[order], 0.0)
+    V = V[:, order]
+    s = xp.sqrt(vals)
+    nonzero = s > eps * max(T, N) * (s[0] if s.size else 1.0)
+    U = xp.zeros((T, N), dtype=dtype)
+    if xp.any(nonzero):
+        U[:, nonzero] = (M @ V[:, nonzero]) / s[nonzero][None, :]
+    return U, s, V.T
+
+
 # ---------------------------------------------------------------------------
 # Panel factor extraction  (equivalent to R fect's panel_factor)
 # ---------------------------------------------------------------------------
@@ -200,10 +231,13 @@ def panel_FE(E, lam: float, hard: bool = False) -> np.ndarray:
     T, N = E.shape
     scale = T * N
 
-    # We need all singular values to threshold, so use full SVD here.
-    # But we can still save work: after thresholding, the effective rank
-    # is usually small, so reconstruction is cheap.
-    U, s, Vt = full_svd(E / scale)
+    M = E / scale
+    min_dim = min(T, N)
+    max_dim = max(T, N)
+    if min_dim > 0 and max_dim >= 4 * min_dim:
+        U, s, Vt = _gram_svd(M)
+    else:
+        U, s, Vt = full_svd(M)
 
     if hard:
         mask = s > lam

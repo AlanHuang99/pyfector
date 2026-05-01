@@ -11,6 +11,7 @@ import polars as pl
 import pytest
 
 import pyfector
+from pyfector.cv import _make_cv_folds
 from conftest import _simulate_panel
 
 
@@ -170,6 +171,40 @@ class TestInputs:
         )
         assert r1.att_avg == r2.att_avg
         assert r1.inference.att_avg_se == r2.inference.att_avg_se
+
+    def test_group_raises_until_supported(self):
+        sim = _simulate_panel(N=30, T=20, N_treated=10, r=1, seed=41)
+        with pytest.raises(NotImplementedError, match="group"):
+            pyfector.fect(
+                data=sim["data"], Y="Y", D="D", index=("unit", "time"),
+                method="fe", CV=False, group="unit",
+            )
+
+    def test_cfe_z_q_raise_until_supported(self):
+        sim = _simulate_panel(N=30, T=20, N_treated=10, r=1, seed=42)
+        with pytest.raises(NotImplementedError, match="Z.*Q"):
+            pyfector.fect(
+                data=sim["data"], Y="Y", D="D", index=("unit", "time"),
+                method="cfe", CV=False, Z=["Z1"], Q=["Q1"],
+            )
+
+    def test_cv_nobs_creates_block_masks(self):
+        II = np.ones((12, 4))
+        D = np.zeros((12, 4))
+        folds = _make_cv_folds(
+            II, D, k=1, cv_prop=0.5, cv_nobs=3,
+            cv_treat=False, cv_donut=0,
+            rng=np.random.default_rng(123),
+        )
+        mask = folds[0]["mask"]
+
+        has_run = False
+        for j in range(mask.shape[1]):
+            run = 0
+            for value in mask[:, j]:
+                run = run + 1 if value else 0
+                has_run = has_run or run >= 2
+        assert has_run
 
 
 # ---------------------------------------------------------------------------
