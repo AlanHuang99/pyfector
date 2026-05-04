@@ -332,6 +332,8 @@ def fect(
     set_device(device)
     xp = get_backend()
     n_jobs = _resolve_n_jobs(n_jobs)
+    if device == "gpu":
+        n_jobs = 1
 
     if group is not None:
         raise NotImplementedError("The `group` argument is not implemented yet.")

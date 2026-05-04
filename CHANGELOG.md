@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.6 - 2026-05-04
+
+- Fixed a large-panel cross-validation fold-construction bottleneck by tracking masked cells incrementally instead of repeatedly summing the full mask.
+- Added regression coverage for exact CV-fold mask preservation and for avoiding full-mask rescans.
+- Improved optional GPU backend robustness by using host-side RNG for index sampling, avoiding unnecessary sort kernels after Gram eigendecomposition, and serializing Python-level jobs on GPU runs.
+- Moved CV scoring reductions to host arrays for more stable optional GPU execution.
+- Updated the PyPI publish workflow to disable attestations unless the PyPI project is configured for them.
+
 ## 0.1.5 - 2026-05-01
 
 - Made cross-validation paper-faithful by default: `cv_rule="min"` now selects the strict lowest-score candidate.

@@ -108,16 +108,24 @@ def _make_cv_folds(
         else:
             # Match R fect's block-style CV more closely: hide short
             # within-unit runs rather than only isolated cells.
-            while int(mask.sum()) < min(rm_count, n_eligible):
+            target = min(rm_count, n_eligible)
+            n_masked = 0
+            while n_masked < target:
                 base = int(rng_np.integers(n_eligible))
                 row = int(elig_rows[base])
                 col = int(elig_cols[base])
                 stop = min(T, row + cv_nobs)
                 rows = np.arange(row, stop)
                 rows = rows[eligible_np[rows, col] > 0]
-                mask[rows, col] = True
                 if len(rows) == 0:
-                    mask[row, col] = True
+                    if not mask[row, col]:
+                        mask[row, col] = True
+                        n_masked += 1
+                else:
+                    new_rows = rows[~mask[rows, col]]
+                    if len(new_rows) > 0:
+                        mask[new_rows, col] = True
+                        n_masked += int(len(new_rows))
 
             selected = np.flatnonzero(mask.ravel())
             if len(selected) > rm_count:
@@ -166,23 +174,21 @@ def _score_residuals(
     count_weights: np.ndarray | None = None,
 ) -> dict[str, float]:
     """Compute CV scoring criteria from residuals at eval cells."""
-    xp = get_backend()
+    e = to_numpy(residuals[eval_mask])
+    n = max(int(e.size), 1)
 
-    e = residuals[eval_mask]
-    n = max(int(xp.sum(eval_mask)), 1)
-
-    mspe = float(xp.sum(e ** 2) / n)
+    mspe = float(np.sum(e ** 2) / n)
 
     # GMSPE: geometric mean of squared errors
     e2 = e ** 2
     e2_pos = e2[e2 > 0]
     if len(e2_pos) > 0:
-        gmspe = float(xp.exp(xp.mean(xp.log(e2_pos))))
+        gmspe = float(np.exp(np.mean(np.log(e2_pos))))
     else:
         gmspe = float("inf")
 
     # MAD: median absolute deviation
-    mad = float(xp.median(xp.abs(e))) if len(e) > 0 else float("inf")
+    mad = float(np.median(np.abs(e))) if len(e) > 0 else float("inf")
 
     return {
         "mspe": mspe,

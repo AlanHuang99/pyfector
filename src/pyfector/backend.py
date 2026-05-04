@@ -73,16 +73,12 @@ def to_device(arr):
 
 
 def make_rng(seed: int | None = None):
-    """Create a seeded RNG for the active backend.
+    """Create a seeded host RNG.
 
-    Returns a ``numpy.random.Generator`` or ``cupy.random.Generator``
-    depending on the current device.
+    Cross-validation and inference use this generator only for indices
+    and seeds, so keeping it on the host avoids backend-specific RNG
+    differences while preserving reproducibility.
     """
-    if _DEVICE == "gpu":
-        import cupy
-        if seed is not None:
-            return cupy.random.default_rng(seed)
-        return cupy.random.default_rng()
     if seed is not None:
         return np.random.default_rng(seed)
     return np.random.default_rng()

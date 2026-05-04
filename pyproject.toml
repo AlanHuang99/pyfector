@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyfector"
-version = "0.1.5"
+version = "0.1.6"
 description = "Fast counterfactual estimators for panel data — Python reimplementation of R fect"
 readme = "README.md"
 license = "MIT"
@@ -52,6 +52,16 @@ dev = [
 r-comparison = [
     "rpy2>=3.5",
     "pandas>=2.0",
+]
+
+[tool.hatch.build]
+exclude = [
+    "/.claude",
+    "/.codex",
+    "/.pytest_cache",
+    "/.venv",
+    "/dist",
+    "/logs",
 ]
 
 [tool.hatch.build.targets.wheel]

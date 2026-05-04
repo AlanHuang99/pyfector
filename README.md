@@ -19,12 +19,12 @@ pip install -e ".[dev]"
 
 Optional extras: `pip install pyfector[gpu]` (CuPy), `pip install pyfector[pandas]`.
 
-## What's New in 0.1.5
+## What's New in 0.1.6
 
-- Made the cross-validation default paper-faithful: `cv_rule="min"` selects the lowest validation score. The one-percent slack rule is still available as `cv_rule="onepct"` for conservative model-complexity sensitivity checks.
-- Removed obsolete CV-rule compatibility spelling; accepted CV rules are now only `"min"` and `"onepct"`.
-- Clarified missing-outcome handling: raw missing `Y` cells are never treated as zero-valued observations and do not enter ATT averages; all-missing units are dropped.
-- Expanded API documentation with the paper-first design policy, CV-rule rationale, and sparse-panel estimand implications.
+- Fixed a large-panel cross-validation bottleneck in block fold construction for matrix completion and IFE.
+- Added regression tests that preserve historical CV masks while preventing repeated full-mask scans.
+- Improved optional GPU-path robustness by keeping random index generation on the host, avoiding unnecessary sort kernels after Gram eigendecomposition, and running GPU jobs serially at the Python task level.
+- Kept CPU as the recommended backend for CV-heavy and bootstrap-heavy workflows unless local GPU benchmarks show a gain.
 
 ## Quick Start
 

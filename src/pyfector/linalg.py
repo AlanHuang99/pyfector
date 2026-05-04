@@ -115,9 +115,8 @@ def _gram_svd(M):
 
     if T <= N:
         vals, U = xp.linalg.eigh(M @ M.T)
-        order = xp.argsort(vals)[::-1]
-        vals = xp.maximum(vals[order], 0.0)
-        U = U[:, order]
+        vals = xp.maximum(vals[::-1], 0.0)
+        U = U[:, ::-1]
         s = xp.sqrt(vals)
         nonzero = s > eps * max(T, N) * (s[0] if s.size else 1.0)
         Vt = xp.zeros((T, N), dtype=dtype)
@@ -126,9 +125,8 @@ def _gram_svd(M):
         return U, s, Vt
 
     vals, V = xp.linalg.eigh(M.T @ M)
-    order = xp.argsort(vals)[::-1]
-    vals = xp.maximum(vals[order], 0.0)
-    V = V[:, order]
+    vals = xp.maximum(vals[::-1], 0.0)
+    V = V[:, ::-1]
     s = xp.sqrt(vals)
     nonzero = s > eps * max(T, N) * (s[0] if s.size else 1.0)
     U = xp.zeros((T, N), dtype=dtype)
