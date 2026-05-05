@@ -103,7 +103,8 @@ For unit filtering, the default estimand is the ATT over the matched panel's obs
 fect(
     data, Y, D, index,
     *, X=None, W=None, group=None, method="ife", force="two-way",
-    r=0, lam=None, nlambda=10, CV=True, k=10, cv_prop=0.1,
+    r=0, lam=None, nlambda=10, lambda_candidates=None,
+    CV=True, k=10, cv_prop=0.1,
     cv_nobs=3, cv_treat=True, cv_donut=0, criterion="mspe",
     cv_rule="min",
     se=False, vartype="bootstrap", nboots=200, alpha=0.05,
@@ -128,6 +129,7 @@ fect(
 | `r` | `int` or `(int, int)` | `0` | Number of factors; tuple triggers CV over range |
 | `lam` | `float` | `None` | MC nuclear-norm penalty; `None` selects by CV |
 | `nlambda` | `int` | `10` | Grid size for MC CV |
+| `lambda_candidates` | array-like | `None` | Explicit non-negative lambda candidates for MC CV; overrides `nlambda` |
 | `CV` | `bool` | `True` | Cross-validate over `r` or `lam` |
 | `k` | `int` | `10` | CV folds |
 | `cv_prop` | `float` | `0.1` | Fraction of control cells masked per CV fold |

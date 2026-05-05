@@ -21,6 +21,7 @@ import time
 
 import pyfector
 from conftest import _simulate_panel
+from pyfector.inference import bootstrap
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +40,36 @@ def _quick_result(panel, method="fe", r=0, nboots=50, seed=42, n_jobs=1, **kw):
 # ---------------------------------------------------------------------------
 # 1. SE stability: more boots → more stable SE
 # ---------------------------------------------------------------------------
+
+
+class TestBootstrapPointEstimateReuse:
+    def test_bootstrap_reuses_supplied_point_estimate(self):
+        eff = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+        D = np.array([[0, 0, 0], [1, 0, 0]], dtype=bool)
+        I = np.ones_like(D, dtype=bool)
+        T_on = np.array([[-1.0, np.nan, np.nan], [0.0, np.nan, np.nan]])
+        unit_type = np.array([2, 1, 1])
+        calls = 0
+
+        def estimate_fn(unit_idx):
+            nonlocal calls
+            calls += 1
+            return eff[:, unit_idx], D[:, unit_idx], T_on[:, unit_idx], I[:, unit_idx]
+
+        result = bootstrap(
+            estimate_fn,
+            eff,
+            D,
+            I,
+            T_on,
+            unit_type,
+            nboots=7,
+            seed=123,
+            point_estimate=(eff, D, T_on, I),
+        )
+
+        assert calls == 7
+        assert result.att_avg == 2.0
 
 class TestSEStability:
     """Increasing nboots should produce a more stable SE estimate."""

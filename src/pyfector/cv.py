@@ -38,6 +38,7 @@ tolerance.
 from __future__ import annotations
 
 import math
+import warnings
 from typing import Literal, NamedTuple
 
 import numpy as np
@@ -331,6 +332,14 @@ def cv_mc(
     # Generate lambda grid if not provided
     if lambda_candidates is None:
         lambda_candidates = _make_lambda_grid(Y, II, nlambda)
+    else:
+        lambda_candidates = np.asarray(lambda_candidates, dtype=float)
+        if lambda_candidates.ndim != 1 or lambda_candidates.size == 0:
+            raise ValueError("lambda_candidates must be a non-empty one-dimensional array")
+        if not np.all(np.isfinite(lambda_candidates)):
+            raise ValueError("lambda_candidates must contain only finite values")
+        if np.any(lambda_candidates < 0):
+            raise ValueError("lambda_candidates must be non-negative")
 
     # Generate folds
     folds = _make_cv_folds(II, D, k, cv_prop, cv_nobs, cv_treat, cv_donut, rng)
@@ -374,6 +383,7 @@ def cv_mc(
         scores, lambda_order, criterion,
         cv_rule=cv_rule,
     )
+    _warn_if_lambda_on_boundary(best_lambda, lambda_candidates)
 
     return CVResult(best_r=None, best_lambda=best_lambda, scores=scores, all_residuals={})
 
@@ -422,3 +432,39 @@ def _select_best(
             return c
 
     return min(vals, key=lambda x: x[1])[0]
+
+
+def _warn_if_lambda_on_boundary(best_lambda: float | None, lambda_candidates) -> None:
+    """Warn when MC cross-validation selects a grid boundary."""
+    if best_lambda is None:
+        return
+
+    candidates = np.asarray([float(lam) for lam in lambda_candidates], dtype=float)
+    if candidates.size <= 1:
+        return
+
+    best = float(best_lambda)
+    lower = float(np.min(candidates))
+    upper = float(np.max(candidates))
+
+    if np.isclose(best, lower, rtol=1e-12, atol=1e-12):
+        warnings.warn(
+            (
+                "MC cross-validation selected the lowest lambda in the candidate "
+                f"grid ({lower:g}). This boundary choice may indicate that little "
+                "or no regularization is preferred; compare cv_rule='onepct' or "
+                "set lam explicitly after validating the boundary selection."
+            ),
+            UserWarning,
+            stacklevel=3,
+        )
+    elif np.isclose(best, upper, rtol=1e-12, atol=1e-12):
+        warnings.warn(
+            (
+                "MC cross-validation selected the highest lambda in the candidate "
+                f"grid ({upper:g}). This boundary choice may indicate that the "
+                "grid should be extended upward."
+            ),
+            UserWarning,
+            stacklevel=3,
+        )

@@ -194,6 +194,7 @@ def fect(
     r: int | tuple[int, int] = 0,
     lam: float | None = None,
     nlambda: int = 10,
+    lambda_candidates: list[float] | np.ndarray | None = None,
     CV: bool = True,
     k: int = 10,
     cv_prop: float = 0.1,
@@ -270,6 +271,9 @@ def fect(
         Nuclear norm penalty for MC.  If None with CV=True, auto-selected.
     nlambda : int
         Number of automatically generated lambda candidates for MC CV.
+    lambda_candidates : array-like, optional
+        Explicit non-negative lambda candidates for MC CV. When supplied,
+        ``nlambda`` is ignored.
     CV : bool
         If True, cross-validate over ``r`` for IFE when ``r`` is a tuple,
         or over ``lam`` for MC when ``lam`` is None.
@@ -401,7 +405,8 @@ def fect(
         if lam is None and CV:
             cv_result = cv_mc(
                 Y_mat, Y0, X_mat, I_mat, II_mat, D_mat, W_mat, beta0,
-                force=force_int, nlambda=nlambda, k=k, cv_prop=cv_prop,
+                force=force_int, lambda_candidates=lambda_candidates,
+                nlambda=nlambda, k=k, cv_prop=cv_prop,
                 cv_nobs=cv_nobs, cv_treat=cv_treat, cv_donut=cv_donut,
                 criterion=criterion, cv_rule=cv_rule,
                 tol=tol, max_iter=max_iter,
@@ -644,6 +649,7 @@ def _run_inference(
             _estimate_fn, to_numpy(Y_mat), to_numpy(panel.D),
             to_numpy(panel.I), panel.T_on, panel.unit_type,
             nboots=nboots, alpha=alpha, n_jobs=n_jobs, seed=seed,
+            point_estimate=(result.eff, panel.D, panel.T_on, panel.I),
         )
     else:
         return jackknife(

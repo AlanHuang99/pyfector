@@ -182,6 +182,20 @@ class TestMCSmoke:
         assert result.lambda_cv is not None
         assert result.cv_result is not None
 
+    def test_mc_cv_accepts_explicit_lambda_candidates(self, small_panel):
+        result = pyfector.fect(
+            data=small_panel["data"],
+            Y="Y", D="D",
+            index=("unit", "time"),
+            method="mc",
+            CV=True,
+            lambda_candidates=[0.1],
+            k=2,
+            seed=42,
+        )
+        assert result.lambda_cv == 0.1
+        assert set(result.cv_result.scores) == {0.1}
+
 
 class TestCovariateSmoke:
     """Test with covariates."""

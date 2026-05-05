@@ -6,12 +6,14 @@ These tests sit between ``test_smoke.py`` (happy-path sanity) and
 that are most likely to break when the DGP deviates from the default.
 """
 
+import warnings
+
 import numpy as np
 import polars as pl
 import pytest
 
 import pyfector
-from pyfector.cv import _make_cv_folds, _select_best
+from pyfector.cv import _make_cv_folds, _select_best, _warn_if_lambda_on_boundary
 from pyfector.fect import _compute_effects
 from pyfector.panel import prepare_panel
 from conftest import _simulate_panel
@@ -263,6 +265,20 @@ class TestCVSelection:
         scores = {0: {"mspe": 1.0}}
         with pytest.raises(ValueError, match="cv_rule"):
             _select_best(scores, [0], "mspe", cv_rule="1se")
+
+    def test_lambda_boundary_warning_for_lowest_candidate(self):
+        with pytest.warns(UserWarning, match="lowest lambda"):
+            _warn_if_lambda_on_boundary(0.0, [10.0, 1.0, 0.0])
+
+    def test_lambda_boundary_warning_for_highest_candidate(self):
+        with pytest.warns(UserWarning, match="highest lambda"):
+            _warn_if_lambda_on_boundary(10.0, [10.0, 1.0, 0.0])
+
+    def test_lambda_boundary_warning_ignores_interior_candidate(self):
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            _warn_if_lambda_on_boundary(1.0, [10.0, 1.0, 0.0])
+        assert len(record) == 0
 
 
 class TestPanelFiltering:

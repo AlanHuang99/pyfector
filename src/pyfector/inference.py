@@ -74,6 +74,7 @@ def bootstrap(
     n_jobs: int = 1,
     seed: int | None = None,
     cluster: np.ndarray | None = None,
+    point_estimate=None,
 ) -> InferenceResult:
     """Non-parametric cluster bootstrap.
 
@@ -89,6 +90,10 @@ def bootstrap(
         1=control, 2=treated, 3=reversal
     cluster : (N,) array, optional
         Cluster assignments. If None, each unit is its own cluster.
+    point_estimate : tuple, optional
+        Precomputed full-sample ``(eff, D, T_on, I)`` result. If supplied,
+        bootstrap reuses it as the original point estimate and only calls
+        ``estimate_fn`` for resampled replications.
     """
     rng = np.random.default_rng(seed)
     N = Y.shape[1]
@@ -102,9 +107,11 @@ def bootstrap(
     N_co = len(control_idx)
     N_rev = len(reversal_idx)
 
-    # Point estimate
+    # Point estimate. fect() already has this before entering inference, so
+    # callers may pass it to avoid re-estimating the unchanged full sample.
+    point_result = point_estimate if point_estimate is not None else estimate_fn(np.arange(N))
     eff_point, D_point, T_on_point, I_point = _unpack_estimate(
-        estimate_fn(np.arange(N)), I
+        point_result, I
     )
     att_avg_point, att_on_point, time_on = _compute_att(eff_point, D_point, T_on_point, I_point)
 
