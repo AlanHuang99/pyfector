@@ -19,12 +19,12 @@ pip install -e ".[dev]"
 
 Optional extras: `pip install pyfector[gpu]` (CuPy), `pip install pyfector[pandas]`.
 
-## What's New in 0.1.6
+## What's New in 0.1.7
 
-- Fixed a large-panel cross-validation bottleneck in block fold construction for matrix completion and IFE.
-- Added regression tests that preserve historical CV masks while preventing repeated full-mask scans.
-- Improved optional GPU-path robustness by keeping random index generation on the host, avoiding unnecessary sort kernels after Gram eigendecomposition, and running GPU jobs serially at the Python task level.
-- Kept CPU as the recommended backend for CV-heavy and bootstrap-heavy workflows unless local GPU benchmarks show a gain.
+- Added explicit `lambda_candidates` support for targeted matrix-completion CV grids.
+- Reused the existing full-sample point estimate during bootstrap setup, avoiding duplicate point re-estimation.
+- Added diagnostics that warn when MC cross-validation selects a lambda grid boundary.
+- Expanded release wheel smoke checks to Python 3.10, 3.11, 3.12, and 3.13.
 
 ## Quick Start
 

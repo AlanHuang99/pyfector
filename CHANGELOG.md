@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.7 - 2026-05-04
+
+- Added explicit `lambda_candidates` support for targeted matrix-completion CV grids.
+- Reused the existing full-sample point estimate during bootstrap setup, avoiding duplicate point re-estimation while preserving all bootstrap resampled fits.
+- Added MC CV diagnostics that warn when the selected lambda is on the candidate-grid boundary.
+- Expanded release wheel smoke checks to Python 3.10, 3.11, 3.12, and 3.13.
+
 ## 0.1.6 - 2026-05-04
 
 - Fixed a large-panel cross-validation fold-construction bottleneck by tracking masked cells incrementally instead of repeatedly summing the full mask.
