@@ -23,11 +23,21 @@ Usage::
 
 """
 
-__version__ = "0.1.7"
+__version__ = "0.2.0"
 
 from .fect import fect, FectResult
 from .backend import set_device, get_device
-from .diagnostics import run_diagnostics, DiagnosticResult
+from .diagnostics import (
+    run_diagnostics,
+    Diagnostics,
+    DiagnosticResult,
+    TostResult,
+    PretrendFResult,
+    EquivFResult,
+    PlaceboResult,
+    CarryoverResult,
+    LooResult,
+)
 from .plotting import plot
 
 __all__ = [
@@ -36,6 +46,13 @@ __all__ = [
     "set_device",
     "get_device",
     "run_diagnostics",
+    "Diagnostics",
     "DiagnosticResult",
+    "TostResult",
+    "PretrendFResult",
+    "EquivFResult",
+    "PlaceboResult",
+    "CarryoverResult",
+    "LooResult",
     "plot",
 ]

@@ -91,6 +91,8 @@ def _make_cv_folds(
     rm_count = max(1, int(total_eligible * cv_prop))
 
     # Get indices of eligible cells
+    II_np = to_numpy(II)
+    D_np = to_numpy(D)
     eligible_np = to_numpy(eligible)
     elig_rows, elig_cols = np.where(eligible_np > 0)
     n_eligible = len(elig_rows)
@@ -134,14 +136,14 @@ def _make_cv_folds(
                 mask.ravel()[drop] = False
 
         # Keep every row and usable unit identifiable after masking.
-        II_after = to_numpy(II).copy()
+        II_after = II_np.copy()
         II_after[mask] = 0
         bad_rows = np.where(II_after.sum(axis=1) < 1)[0]
         if len(bad_rows) > 0:
             mask[bad_rows, :] = False
-            II_after = to_numpy(II).copy()
+            II_after = II_np.copy()
             II_after[mask] = 0
-        orig_col_counts = to_numpy(II).sum(axis=0)
+        orig_col_counts = II_np.sum(axis=0)
         bad_cols = np.where((orig_col_counts > 0) & (II_after.sum(axis=0) < 1))[0]
         if len(bad_cols) > 0:
             mask[:, bad_cols] = False
@@ -150,7 +152,7 @@ def _make_cv_folds(
         eval_mask = mask.copy()
         if cv_donut > 0:
             for j in range(N):
-                treat_times = np.where(to_numpy(D[:, j]) > 0)[0]
+                treat_times = np.where(D_np[:, j] > 0)[0]
                 if len(treat_times) > 0:
                     first_treat = treat_times[0]
                     donut_start = max(0, first_treat - cv_donut)
@@ -252,9 +254,7 @@ def cv_ife(
     r_candidates = list(range(r_range[0], r_range[1] + 1))
     scores = {}
 
-    for r_cand in r_candidates:
-        fold_residuals = []
-
+    def _score_candidate(r_cand: int, parallel: Parallel | None = None) -> dict[str, float]:
         def _run_fold(fold):
             II_cv = II.copy()
             II_cv[fold["mask"]] = 0
@@ -272,28 +272,30 @@ def cv_ife(
             resid = Y - result.fit
             return _score_residuals(resid, fold["eval"])
 
-        if n_jobs == 1:
+        if parallel is None:
             fold_scores = [_run_fold(f) for f in folds]
         else:
-            fold_scores = Parallel(n_jobs=n_jobs, prefer="threads")(
-                delayed(_run_fold)(f) for f in folds
-            )
+            fold_scores = parallel(delayed(_run_fold)(f) for f in folds)
 
         # Average scores across folds
-        avg_scores = {}
-        for metric in fold_scores[0]:
-            avg_scores[metric] = sum(fs[metric] for fs in fold_scores) / len(fold_scores)
-        scores[r_cand] = avg_scores
+        return {
+            metric: sum(fs[metric] for fs in fold_scores) / len(fold_scores)
+            for metric in fold_scores[0]
+        }
+
+    if n_jobs == 1:
+        for r_cand in r_candidates:
+            scores[r_cand] = _score_candidate(r_cand)
+    else:
+        with Parallel(n_jobs=n_jobs, prefer="threads") as parallel:
+            for r_cand in r_candidates:
+                scores[r_cand] = _score_candidate(r_cand, parallel)
 
     # r_candidates is ordered from simpler to more flexible.
     best_r = _select_best(scores, r_candidates, criterion, cv_rule=cv_rule)
 
     return CVResult(best_r=best_r, best_lambda=None, scores=scores, all_residuals={})
 
-
-# ---------------------------------------------------------------------------
-# CV for MC (selecting lambda)
-# ---------------------------------------------------------------------------
 
 def cv_mc(
     Y: np.ndarray,
@@ -345,7 +347,7 @@ def cv_mc(
     folds = _make_cv_folds(II, D, k, cv_prop, cv_nobs, cv_treat, cv_donut, rng)
 
     scores = {}
-    for lam in lambda_candidates:
+    def _score_candidate(lam: float, parallel: Parallel | None = None) -> dict[str, float]:
         lam_key = float(lam)
 
         def _run_fold(fold):
@@ -363,17 +365,23 @@ def cv_mc(
             resid = Y - result.fit
             return _score_residuals(resid, fold["eval"])
 
-        if n_jobs == 1:
+        if parallel is None:
             fold_scores = [_run_fold(f) for f in folds]
         else:
-            fold_scores = Parallel(n_jobs=n_jobs, prefer="threads")(
-                delayed(_run_fold)(f) for f in folds
-            )
+            fold_scores = parallel(delayed(_run_fold)(f) for f in folds)
 
-        avg_scores = {}
-        for metric in fold_scores[0]:
-            avg_scores[metric] = sum(fs[metric] for fs in fold_scores) / len(fold_scores)
-        scores[lam_key] = avg_scores
+        return {
+            metric: sum(fs[metric] for fs in fold_scores) / len(fold_scores)
+            for metric in fold_scores[0]
+        }
+
+    if n_jobs == 1:
+        for lam in lambda_candidates:
+            scores[float(lam)] = _score_candidate(float(lam))
+    else:
+        with Parallel(n_jobs=n_jobs, prefer="threads") as parallel:
+            for lam in lambda_candidates:
+                scores[float(lam)] = _score_candidate(float(lam), parallel)
 
     # Select from heavier to lighter regularization, i.e. from simpler
     # to more flexible. Sort here so user-supplied grids behave the same

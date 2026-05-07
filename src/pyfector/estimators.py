@@ -101,6 +101,130 @@ def _fe_adj(FE, I):
     return xp.where(I, FE, 0.0)
 
 
+def _active_fe_rank(mask: np.ndarray, force: int) -> int:
+    """Rank of the additive FE design on the observed estimation cells."""
+    mask = np.asarray(mask, dtype=bool)
+    obs = int(mask.sum())
+    if obs == 0:
+        return 0
+    if force == 0:
+        return 1
+
+    active_rows = mask.any(axis=1)
+    active_cols = mask.any(axis=0)
+    n_rows = int(active_rows.sum())
+    n_cols = int(active_cols.sum())
+
+    if force == 1:
+        return n_cols
+    if force == 2:
+        return n_rows
+
+    # Two-way FE rank is active rows + active columns minus the number of
+    # connected components in the observed row-column bipartite graph.
+    from scipy import sparse
+    from scipy.sparse.csgraph import connected_components
+
+    row_idx, col_idx = np.nonzero(mask)
+    row_map = np.full(mask.shape[0], -1, dtype=np.int64)
+    col_map = np.full(mask.shape[1], -1, dtype=np.int64)
+    row_map[np.where(active_rows)[0]] = np.arange(n_rows)
+    col_map[np.where(active_cols)[0]] = np.arange(n_cols)
+
+    graph_rows = row_map[row_idx]
+    graph_cols = n_rows + col_map[col_idx]
+    rows = np.concatenate([graph_rows, graph_cols])
+    cols = np.concatenate([graph_cols, graph_rows])
+    data = np.ones(rows.size, dtype=np.int8)
+    graph = sparse.csr_matrix(
+        (data, (rows, cols)),
+        shape=(n_rows + n_cols, n_rows + n_cols),
+    )
+    components = int(connected_components(graph, directed=False, return_labels=False))
+    return n_rows + n_cols - components
+
+
+def _fe_design_sparse(mask: np.ndarray, force: int):
+    """Sparse additive-FE design for observed cells, used for df accounting."""
+    from scipy import sparse
+
+    mask = np.asarray(mask, dtype=bool)
+    row_idx, col_idx = np.nonzero(mask)
+    n_obs = row_idx.size
+    obs_idx = np.arange(n_obs, dtype=np.int64)
+
+    if force == 0:
+        return sparse.csr_matrix(np.ones((n_obs, 1), dtype=np.float64))
+
+    if force == 1:
+        active_cols = np.where(mask.any(axis=0))[0]
+        col_map = np.full(mask.shape[1], -1, dtype=np.int64)
+        col_map[active_cols] = np.arange(active_cols.size)
+        return sparse.csr_matrix(
+            (np.ones(n_obs), (obs_idx, col_map[col_idx])),
+            shape=(n_obs, active_cols.size),
+        )
+
+    if force == 2:
+        active_rows = np.where(mask.any(axis=1))[0]
+        row_map = np.full(mask.shape[0], -1, dtype=np.int64)
+        row_map[active_rows] = np.arange(active_rows.size)
+        return sparse.csr_matrix(
+            (np.ones(n_obs), (obs_idx, row_map[row_idx])),
+            shape=(n_obs, active_rows.size),
+        )
+
+    active_rows = np.where(mask.any(axis=1))[0]
+    active_cols = np.where(mask.any(axis=0))[0]
+    row_map = np.full(mask.shape[0], -1, dtype=np.int64)
+    col_map = np.full(mask.shape[1], -1, dtype=np.int64)
+    row_map[active_rows] = np.arange(active_rows.size)
+    col_map[active_cols] = np.arange(active_cols.size)
+    rows = np.concatenate([obs_idx, obs_idx])
+    cols = np.concatenate([
+        row_map[row_idx],
+        active_rows.size + col_map[col_idx],
+    ])
+    data = np.ones(rows.size, dtype=np.float64)
+    return sparse.csr_matrix(
+        (data, (rows, cols)),
+        shape=(n_obs, active_rows.size + active_cols.size),
+    )
+
+
+def _residual_df_r0(I, force: int, X=None) -> int:
+    """Residual df for the additive FE baseline on observed estimation cells.
+
+    The r=0 baseline is the variance source for ``sigma2_fect``. Its
+    denominator should reflect the rank of the design identified by the
+    observed untreated cells, not just a nominal balanced-panel parameter
+    count.
+    """
+    mask = np.asarray(to_numpy(I), dtype=bool)
+    obs = int(mask.sum())
+    if obs == 0:
+        return 1
+
+    model_rank = _active_fe_rank(mask, force)
+
+    if X is not None and X.shape[2] > 0:
+        from scipy.sparse.linalg import lsmr
+
+        X_obs = np.asarray(to_numpy(X), dtype=np.float64)[mask, :]
+        finite_cols = np.all(np.isfinite(X_obs), axis=0)
+        if np.any(finite_cols):
+            X_obs = X_obs[:, finite_cols]
+            A = _fe_design_sparse(mask, force)
+            residualized = np.empty_like(X_obs, dtype=np.float64)
+            for j in range(X_obs.shape[1]):
+                sol = lsmr(A, X_obs[:, j], atol=1e-10, btol=1e-10)
+                residualized[:, j] = X_obs[:, j] - A @ sol[0]
+            if residualized.size:
+                model_rank += int(np.linalg.matrix_rank(residualized))
+
+    return max(obs - model_rank, 1)
+
+
 def _frob_ratio(new, old, W=None, buf=None):
     """Relative Frobenius norm change: ``||new - old||_F / ||old||_F``.
 
@@ -215,8 +339,8 @@ def estimate_ife(
             mu = float(xp.sum(Y * I) / (xp.sum(I) + 1e-10))
         fit = xp.full_like(Y, mu)
         residuals = _fe_adj(Y - fit, I)
-        obs = float(xp.sum(I))
-        sigma2 = float(xp.sum(residuals ** 2) / max(obs - 1, 1))
+        denom = _residual_df_r0(I, force)
+        sigma2 = float(xp.sum(residuals ** 2) / denom)
         return EstimationResult(
             beta=None, mu=mu, alpha=None, xi=None,
             factors=None, loadings=None, eigenvalues=None,
@@ -269,8 +393,8 @@ def _em_fe_ad(Y, Y0, I, W, WI, use_weight, force, tol, max_iter):
             break
 
     residuals = _fe_adj(Y - fit, I)
-    obs = float(xp.sum(I))
-    sigma2 = float(xp.sum(residuals ** 2) / max(obs - 1, 1))
+    denom = _residual_df_r0(I, force)
+    sigma2 = float(xp.sum(residuals ** 2) / denom)
 
     return EstimationResult(
         beta=None, mu=ife_res.mu, alpha=ife_res.alpha, xi=ife_res.xi,
@@ -450,13 +574,8 @@ def _em_fe_ad_covar(Y, Y0, X, I, W, WI, use_weight, beta, xxinv, force, tol, max
         _, _, _, ife_res = _one_em_step(fit, FE, beta)
 
     residuals = _fe_adj(Y - fit, I)
-    obs = float(xp.sum(I))
-    np_param = p + 1
-    if force in (1, 3):
-        np_param += N - 1
-    if force in (2, 3):
-        np_param += T - 1
-    sigma2 = float(xp.sum(residuals ** 2) / max(obs - np_param, 1))
+    denom = _residual_df_r0(I, force, X)
+    sigma2 = float(xp.sum(residuals ** 2) / denom)
 
     return EstimationResult(
         beta=beta, mu=ife_res.mu, alpha=ife_res.alpha, xi=ife_res.xi,

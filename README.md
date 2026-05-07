@@ -1,6 +1,6 @@
 # pyfector
 
-> **Alpha (v0.1.x).** Results have been checked against R `fect` on synthetic data, but edge cases may remain. APIs may change. Please verify critical results independently. Issues and pull requests are welcome at [GitHub](https://github.com/AlanHuang99/pyfector/issues).
+> **Alpha (v0.2.x).** Results have been checked against R `fect` on synthetic data, but edge cases may remain. APIs may change. Please verify critical results independently. Issues and pull requests are welcome at [GitHub](https://github.com/AlanHuang99/pyfector/issues).
 
 Counterfactual estimators for panel data in Python. Port of the R [fect](https://github.com/xuyiqing/fect) package (Liu, Wang & Xu, 2024, *AJPS*), built on numpy, scipy, polars, and joblib, with optional CuPy GPU support.
 
@@ -19,12 +19,13 @@ pip install -e ".[dev]"
 
 Optional extras: `pip install pyfector[gpu]` (CuPy), `pip install pyfector[pandas]`.
 
-## What's New in 0.1.7
+## What's New in 0.2.0
 
-- Added explicit `lambda_candidates` support for targeted matrix-completion CV grids.
-- Reused the existing full-sample point estimate during bootstrap setup, avoiding duplicate point re-estimation.
-- Added diagnostics that warn when MC cross-validation selects a lambda grid boundary.
-- Expanded release wheel smoke checks to Python 3.10, 3.11, 3.12, and 3.13.
+- Added `sigma2_fect`, the additive fixed-effect baseline residual variance used for Liu et al. (2024)'s TOST bound.
+- Changed the default `tost_threshold=0.36` to mean `0.36 * sqrt(sigma2_fect)`, matching the published specification.
+- Added fit-time diagnostics via `diagnostics="full"` or an explicit list, with slim-safe cached results.
+- Replaced the old flat diagnostics output with a future-proof `Diagnostics` registry while keeping built-in convenience properties such as `diag.tost`.
+- Fixed diagnostic F-tests with partially missing bootstrap draws and tightened diagnostics option validation before expensive fits start.
 
 ## Quick Start
 
@@ -202,23 +203,45 @@ When `se=True`, `result.inference` carries bootstrap or jackknife SEs and CIs fo
 ### Diagnostics
 
 ```python
+# Default: omit tost_threshold to use Liu et al. (2024)'s 0.36 * sqrt(sigma2_fect)
 diag = result.diagnose(
-    f_threshold=0.5,
-    tost_threshold=0.36,
     placebo_period=(-5, -1),
     loo=True,
 )
 diag.summary()
+
+# Or run all diagnostics at fit time and store on the result object
+# (slim-safe: result.diagnostics survives a downstream slim of result.panel)
+result = pyfector.fect(
+    df, Y="y", D="d", index=("unit", "time"),
+    method="mc", se=True, nboots=200,
+    diagnostics="full",
+    diagnostics_options={"placebo_period": (-3, 0)},
+)
+result.diagnostics.tost.threshold
+result.diagnostics.tests  # registry for future diagnostic outputs
 ```
 
-| Test | Output |
-|------|--------|
-| Pre-trend F-test | `f_stat`, `f_pval` |
-| Equivalence F-test | `equiv_f_pval` |
-| TOST | `tost_pvals` |
-| Placebo | `placebo_att`, `placebo_pval` |
-| Carryover | `carryover_att`, `carryover_pval` |
-| Leave-one-out | `loo_max_change` |
+The `tost_threshold` argument has three modes:
+
+- Omitted or `0.36`: uses Liu's auto-scaled bound `0.36 * sqrt(result.sigma2_fect)`
+- Any other positive float: absolute outcome-scale bound (e.g. `tost_threshold=0.1`)
+- `None`: invalid; raises `ValueError`
+
+`sigma2_fect` is computed from the additive fixed-effect baseline using
+the `force` structure requested for the fit. With the default
+`force="two-way"`, its denominator uses residual degrees of freedom for
+the identified unit/time FE design on the observed untreated cells.
+
+| Test | Outputs |
+|------|---------|
+| Pre-trend F-test | `diag.pretrend_f.f_stat`, `.p_value`, `.df1`, `.df2` |
+| Equivalence F-test | `diag.equiv_f.p_value`, `.f_threshold` |
+| TOST | `diag.tost.pvals`, `.threshold`, `.threshold_source`, `.max_pval`, `.all_pass` |
+| Placebo | `diag.placebo.estimate`, `.se`, `.p_value`, `.equiv_p_value` |
+| Carryover | `diag.carryover.estimate` |
+| Leave-one-out | `diag.loo.atts`, `.max_change` |
+| Resolved options | `diag.options` (records what was actually used) |
 
 ---
 

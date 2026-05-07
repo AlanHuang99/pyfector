@@ -62,6 +62,11 @@ from .panel import PanelData, prepare_panel, initial_fit
 from .estimators import estimate_ife, estimate_mc, estimate_cfe, EstimationResult
 from .cv import cv_ife, cv_mc, CVResult
 from .inference import bootstrap, jackknife, InferenceResult
+from .diagnostics import (
+    Diagnostics,
+    run_diagnostics as _run_diagnostics,
+    validate_diagnostics_request,
+)
 
 
 @dataclass
@@ -103,6 +108,7 @@ class FectResult:
 
     # Model fit
     sigma2: float = 0.0
+    sigma2_fect: float = 0.0   # additive-FE baseline residual variance
     IC: float = 0.0
     PC: float = 0.0
     rmse: float = 0.0
@@ -111,6 +117,9 @@ class FectResult:
 
     # Inference
     inference: InferenceResult | None = None
+
+    # Diagnostics (populated when fect(..., diagnostics="full" | list))
+    diagnostics: Diagnostics | None = None
 
     # CV
     cv_result: CVResult | None = None
@@ -133,6 +142,7 @@ class FectResult:
             lines.append(f"Lambda (CV): {self.lambda_cv:.6f}")
         lines.append(f"Converged: {self.converged} (iter={self.niter})")
         lines.append(f"Sigma^2: {self.sigma2:.6f}")
+        lines.append(f"Sigma^2_fect (FE baseline): {self.sigma2_fect:.6f}")
         lines.append(f"")
         lines.append(f"ATT (average): {self.att_avg:.6f}")
         if self.inference is not None:
@@ -165,6 +175,9 @@ class FectResult:
             lines.append(f"N={self.panel.N}, T={self.panel.T}")
         if self.seed is not None:
             lines.append(f"Seed: {self.seed}")
+        if self.diagnostics is not None:
+            lines.append("")
+            lines.append(self.diagnostics.summary())
         return "\n".join(lines)
 
     def __repr__(self):
@@ -220,6 +233,9 @@ def fect(
     device: Literal["cpu", "gpu"] = "cpu",
     n_jobs: int | None = -1,
     seed: int | None = None,
+    # Diagnostics (optional; run at fit time and attached to result)
+    diagnostics: Literal["none", "full"] | list[str] = "none",
+    diagnostics_options: dict | None = None,
 ) -> FectResult:
     """Estimate counterfactual treatment effects for panel data.
 
@@ -352,6 +368,13 @@ def fect(
     if not 0.0 <= max_missing <= 1.0:
         raise ValueError("max_missing must be between 0 and 1")
 
+    # Validate diagnostics request before doing any expensive estimation
+    # so users don't wait for a 30-min MC fit only to find their config
+    # is wrong.
+    requested_diag = validate_diagnostics_request(
+        diagnostics, diagnostics_options, se,
+    )
+
     # Map force string to int
     force_map = {"none": 0, "unit": 1, "time": 2, "two-way": 3}
     force_int = force_map[force]
@@ -463,6 +486,19 @@ def fect(
     eff = Y_mat - est.fit
     Y_ct = est.fit
 
+    # Additive-FE baseline residual variance (Liu et al. 2024 sigma2.fect).
+    # For method="fe" the main estimator IS the additive-FE pass, so reuse
+    # est.sigma2. For ife/mc/cfe/both, run an extra r=0 IFE pass on the
+    # same panel with the user's requested FE structure.
+    if method == "fe":
+        sigma2_fect_value = float(est.sigma2)
+    else:
+        est_fect = estimate_ife(
+            Y_mat, Y0, X_mat, II_mat, W_mat, beta0,
+            r=0, force=force_int, tol=tol, max_iter=max_iter,
+        )
+        sigma2_fect_value = float(est_fect.sigma2)
+
     # Denormalize
     if normalize and norm_factor != 1.0:
         eff = eff * norm_factor
@@ -470,6 +506,7 @@ def fect(
         Y_mat = Y_mat * norm_factor
         if est.beta is not None:
             est = est._replace(beta=est.beta * norm_factor)
+        sigma2_fect_value *= norm_factor ** 2
 
     # ATT computation
     T_on = to_device(panel.T_on)
@@ -498,6 +535,7 @@ def fect(
         eff=to_numpy(eff),
         residuals=to_numpy(est.residuals),
         sigma2=est.sigma2,
+        sigma2_fect=sigma2_fect_value,
         IC=est.IC,
         PC=est.PC,
         niter=est.niter,
@@ -516,6 +554,19 @@ def fect(
             vartype=vartype, nboots=nboots, alpha=alpha,
             n_jobs=n_jobs, seed=seed, normalize=normalize,
             norm_factor=norm_factor,
+        )
+
+    # Run requested diagnostics at fit time. requested_diag is None when
+    # diagnostics="none". Validation already enforced se=True and
+    # required-config presence.
+    if requested_diag is not None:
+        opts = dict(diagnostics_options or {})
+        if "loo" in requested_diag:
+            opts["loo"] = True
+        else:
+            opts.setdefault("loo", False)
+        result.diagnostics = _run_diagnostics(
+            result, _requested=requested_diag, **opts,
         )
 
     return result

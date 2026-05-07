@@ -272,6 +272,6 @@ class TestDiagnostics:
         )
         diag = pyfector.run_diagnostics(result)
         # With zero effect, the F-test p-value should be large
-        if diag.f_pval is not None:
+        if diag.pretrend_f is not None:
             # Not a hard assertion since small sample can be noisy
-            print(f"Zero-effect F-test p-value: {diag.f_pval:.4f}")
+            print(f"Zero-effect F-test p-value: {diag.pretrend_f.p_value:.4f}")

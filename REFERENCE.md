@@ -1,6 +1,6 @@
 # pyfector API Reference
 
-**Version 0.1.7**
+**Version 0.2.0**
 
 ## Overview
 
@@ -141,7 +141,7 @@ Returned by `fect()`.
 |--------|---------|-------------|
 | `summary()` | `str` | Formatted text summary |
 | `plot(kind, **kwargs)` | `Figure` | Matplotlib figure |
-| `diagnose(**kwargs)` | `DiagnosticResult` | Diagnostic tests |
+| `diagnose(**kwargs)` | `Diagnostics` | Diagnostic tests |
 
 `plot()` kinds: `"gap"`, `"status"`, `"factors"`, `"counterfactual"`.
 
@@ -165,27 +165,48 @@ Populated when `se=True`.
 
 ---
 
-## `DiagnosticResult`
+## `Diagnostics`
 
-Returned by `result.diagnose()`.
+Returned by `result.diagnose()`. Also attached to `result.diagnostics`
+when `pyfector.fect(..., diagnostics="full")` (or a list of names) runs
+diagnostics at fit time.
 
 ```python
-result.diagnose(
+diag = result.diagnose(
     f_threshold=0.5,
-    tost_threshold=0.36,
     placebo_period=(-5, -1),
     loo=True,
 )
 ```
 
-| Test | Outputs |
-|------|---------|
-| Pre-trend F-test | `f_stat`, `f_pval`, `f_df` |
-| Equivalence F-test | `equiv_f_pval` |
-| TOST equivalence | `tost_pvals` |
-| Placebo | `placebo_att`, `placebo_pval` |
-| Carryover | `carryover_att`, `carryover_pval` |
-| Leave-one-out | `loo_max_change` |
+`tost_threshold` is omitted above so the Liu et al. (2024) default
+`0.36 * sqrt(result.sigma2_fect)` is used. Pass an explicit positive
+float (e.g. `tost_threshold=0.1`) for an absolute outcome-scale bound.
+`sigma2_fect` is the residual variance from the additive fixed-effect
+baseline implied by the fit's `force` option. For two-way FE, the
+denominator uses the residual degrees of freedom of the identified
+unit/time FE design on observed untreated cells.
+
+Registry shape (one sub-dataclass per built-in test, slim-safe):
+
+| Field | Sub-dataclass | Outputs |
+|-------|---------------|---------|
+| `diag.tests` | `dict[str, object]` | registry of populated diagnostics; future tests are added here |
+| `diag.tost` | `TostResult` | `pvals`, `periods`, `threshold`, `threshold_source`, `sigma2_fect`, `max_pval`, `all_pass` |
+| `diag.pretrend_f` | `PretrendFResult` | `f_stat`, `p_value`, `df1`, `df2` |
+| `diag.equiv_f` | `EquivFResult` | `p_value`, `f_threshold` |
+| `diag.placebo` | `PlaceboResult` | `estimate`, `se`, `p_value`, `equiv_p_value`, `period` |
+| `diag.carryover` | `CarryoverResult` | `estimate`, `period` |
+| `diag.loo` | `LooResult` | `atts`, `periods`, `max_change` |
+| `diag.options` | `dict` | resolved tost_threshold, placebo_period, sigma2_fect, pyfector_version |
+
+`DiagnosticResult` remains available as a compatibility alias for
+`Diagnostics`; new code should use `Diagnostics`.
+
+The slim-safety contract guarantees `result.diagnostics` holds only
+primitives, tuples, dicts of primitives, and bounded `np.ndarray`s — no
+references to `FectResult`, `PanelData`, or bootstrap matrices. Safe to
+pickle and to retain after a downstream slim of `result.panel`.
 
 ---
 
