@@ -1,6 +1,6 @@
 # pyfector API Reference
 
-**Version 0.2.0**
+**Version 0.2.1**
 
 ## Overview
 
@@ -133,6 +133,7 @@ Returned by `fect()`.
 | `inference` | `InferenceResult \| None` | Bootstrap / jackknife results |
 | `cv_result` | `CVResult \| None` | CV diagnostics |
 | `panel` | `PanelData` | Processed panel metadata |
+| `fit_options` | `dict` | Fit metadata used by refit-based diagnostics |
 | `seed` | `int \| None` | Seed used |
 
 ### Methods
@@ -179,6 +180,17 @@ diag = result.diagnose(
 )
 ```
 
+`placebo_period` is a holdout/refit placebo test, matching the
+Liu-Wang-Xu/R-`fect` standard. The selected observed pre-treatment cells
+are removed from the fitting mask, the model is refit with the
+already-selected rank/lambda configuration, and the placebo ATT is
+computed from the withheld cells. It is not an average of the existing
+pre-treatment event-study coefficients. `(-3, 0)` withholds relative
+periods `-3`, `-2`, and `-1`; period `0` is the treatment-onset period.
+The point-null `diag.placebo.p_value` follows R `fect`'s default normal
+approximation using the placebo bootstrap SE; `diag.placebo.equiv_p_value`
+is the corresponding normal TOST p-value.
+
 `tost_threshold` is omitted above so the Liu et al. (2024) default
 `0.36 * sqrt(result.sigma2_fect)` is used. Pass an explicit positive
 float (e.g. `tost_threshold=0.1`) for an absolute outcome-scale bound.
@@ -195,7 +207,7 @@ Registry shape (one sub-dataclass per built-in test, slim-safe):
 | `diag.tost` | `TostResult` | `pvals`, `periods`, `threshold`, `threshold_source`, `sigma2_fect`, `max_pval`, `all_pass` |
 | `diag.pretrend_f` | `PretrendFResult` | `f_stat`, `p_value`, `df1`, `df2` |
 | `diag.equiv_f` | `EquivFResult` | `p_value`, `f_threshold` |
-| `diag.placebo` | `PlaceboResult` | `estimate`, `se`, `p_value`, `equiv_p_value`, `period` |
+| `diag.placebo` | `PlaceboResult` | `estimate`, `se`, `p_value`, `equiv_p_value`, `period`, `n_obs`, `n_boot` |
 | `diag.carryover` | `CarryoverResult` | `estimate`, `period` |
 | `diag.loo` | `LooResult` | `atts`, `periods`, `max_change` |
 | `diag.options` | `dict` | resolved tost_threshold, placebo_period, sigma2_fect, pyfector_version |

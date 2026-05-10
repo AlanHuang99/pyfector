@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.1 - 2026-05-10
+
+### Corrected placebo diagnostics to match Liu-Wang-Xu/R `fect`
+
+`diag.placebo` now implements the standardized holdout/refit placebo
+test: selected pre-treatment cells are removed from the fitting mask,
+the model is refit with the already-selected rank/lambda configuration,
+and the placebo ATT is computed from the withheld cells. The previous
+window average of existing pre-period event-study ATTs has been removed.
+
+`PlaceboResult` now also records `n_obs` and `n_boot`, the number of
+withheld observed cells and valid placebo bootstrap refits.
+
+The placebo point-null p-value now matches R `fect`'s default normal
+approximation using the placebo bootstrap SE; the placebo equivalence
+p-value uses the matching normal TOST formula from `diagtest.R`.
+
 ## 0.2.0 - 2026-05-06
 
 **Breaking change** (diagnostics API). The field-by-field migration table is
@@ -82,7 +99,7 @@ Each test owns its own sub-dataclass. Field renames:
 | `diag.equiv_f_pval`, `diag.equiv_threshold` | `diag.equiv_f.p_value`, `diag.equiv_f.f_threshold` |
 | `diag.tost_pvals`, `diag.tost_periods`, `diag.tost_threshold` | `diag.tost.pvals`, `.periods`, `.threshold` |
 | `diag.placebo_att`, `diag.placebo_pval` | `diag.placebo.estimate`, `diag.placebo.p_value` |
-| (new) | `diag.placebo.equiv_p_value` (TOST equivalence on the placebo window) |
+| (new) | `diag.placebo.equiv_p_value` (TOST equivalence p-value for the placebo test) |
 | `diag.carryover_att` | `diag.carryover.estimate` |
 | `diag.loo_atts`, `diag.loo_periods`, `diag.loo_max_change` | `diag.loo.atts`, `.periods`, `.max_change` |
 

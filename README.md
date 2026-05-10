@@ -19,6 +19,12 @@ pip install -e ".[dev]"
 
 Optional extras: `pip install pyfector[gpu]` (CuPy), `pip install pyfector[pandas]`.
 
+## What's New in 0.2.1
+
+- Corrected `diag.placebo` to use the standardized Liu-Wang-Xu/R `fect` holdout/refit placebo test instead of averaging existing pre-period event-study coefficients.
+- Added `PlaceboResult.n_obs` and `PlaceboResult.n_boot` so downstream caches can audit the withheld-cell count and valid placebo bootstrap refits.
+- Matched R `fect`'s default normal approximation for the placebo point-null p-value and normal TOST formula for placebo equivalence.
+
 ## What's New in 0.2.0
 
 - Added `sigma2_fect`, the additive fixed-effect baseline residual variance used for Liu et al. (2024)'s TOST bound.
@@ -222,6 +228,17 @@ result.diagnostics.tost.threshold
 result.diagnostics.tests  # registry for future diagnostic outputs
 ```
 
+`placebo_period` runs the standardized placebo test from Liu, Wang, and
+Xu (2024) and R `fect(placeboTest=TRUE)`: pyfector removes the selected
+observed pre-treatment cells from the fitting mask, refits with the
+already-selected rank/lambda configuration, and computes the placebo ATT
+from the withheld cells. For example, `placebo_period=(-3, 0)` withholds
+relative periods `-3`, `-2`, and `-1`; period `0` is the treatment-onset
+period and is not treated as pre-treatment. The point-null
+`diag.placebo.p_value` follows R `fect`'s default normal approximation
+using the placebo bootstrap SE; `diag.placebo.equiv_p_value` is the
+corresponding normal TOST p-value.
+
 The `tost_threshold` argument has three modes:
 
 - Omitted or `0.36`: uses Liu's auto-scaled bound `0.36 * sqrt(result.sigma2_fect)`
@@ -238,7 +255,7 @@ the identified unit/time FE design on the observed untreated cells.
 | Pre-trend F-test | `diag.pretrend_f.f_stat`, `.p_value`, `.df1`, `.df2` |
 | Equivalence F-test | `diag.equiv_f.p_value`, `.f_threshold` |
 | TOST | `diag.tost.pvals`, `.threshold`, `.threshold_source`, `.max_pval`, `.all_pass` |
-| Placebo | `diag.placebo.estimate`, `.se`, `.p_value`, `.equiv_p_value` |
+| Placebo | `diag.placebo.estimate`, `.se`, `.p_value`, `.equiv_p_value`, `.n_obs`, `.n_boot` |
 | Carryover | `diag.carryover.estimate` |
 | Leave-one-out | `diag.loo.atts`, `.max_change` |
 | Resolved options | `diag.options` (records what was actually used) |

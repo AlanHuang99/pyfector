@@ -52,7 +52,7 @@ Example
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 import os
 
 import numpy as np
@@ -126,6 +126,7 @@ class FectResult:
 
     # Panel metadata
     panel: PanelData | None = None
+    fit_options: dict[str, Any] = field(default_factory=dict)
 
     # Reproducibility
     seed: int | None = None
@@ -542,6 +543,17 @@ def fect(
         converged=est.converged,
         cv_result=cv_result,
         panel=panel,
+        fit_options={
+            "force": force,
+            "force_int": force_int,
+            "tol": tol,
+            "max_iter": max_iter,
+            "normalize": normalize,
+            "norm_factor": norm_factor,
+            "vartype": vartype,
+            "nboots": nboots,
+            "n_jobs": n_jobs,
+        },
         seed=seed,
     )
 

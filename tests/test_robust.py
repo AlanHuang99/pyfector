@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import numpy as np
 import polars as pl
 import pytest
+from scipy import stats
 
 import pyfector
 from pyfector.cv import _make_cv_folds, _select_best, _warn_if_lambda_on_boundary
@@ -547,17 +548,39 @@ class TestTostThresholdSemantics:
         assert diag.tost is None
 
 
-class TestPlaceboEquivPValue:
-    """Placebo block now also produces a TOST equivalence p-value."""
+class TestPlaceboTest:
+    """Placebo diagnostics use the Liu-Wang-Xu/R-fect holdout-refit test."""
 
     def test_placebo_equiv_p_value_populated(self, fitted_with_se):
+        fitted_with_se.inference.att_on_boot = (
+            fitted_with_se.inference.att_on_boot[:, :8]
+        )
         diag = fitted_with_se.diagnose(placebo_period=(-3, 0))
         assert diag.placebo is not None
         assert isinstance(diag.placebo.equiv_p_value, float)
         assert 0.0 <= diag.placebo.equiv_p_value <= 1.0
         assert diag.placebo.period == (-3, 0)
-        # Bootstrap percentile p still populated alongside.
+        assert diag.placebo.n_obs > 0
+        assert diag.placebo.n_boot > 1
         assert 0.0 <= diag.placebo.p_value <= 1.0
+        expected_p = 2 * stats.norm.sf(abs(diag.placebo.estimate / diag.placebo.se))
+        assert diag.placebo.p_value == pytest.approx(expected_p)
+
+    def test_placebo_does_not_average_existing_pre_period_atts(self, fitted_with_se):
+        fitted_with_se.inference.att_on_boot = (
+            fitted_with_se.inference.att_on_boot[:, :5]
+        )
+        pre = fitted_with_se.time_on < 0
+        fitted_with_se.att_on[pre] = 1_000_000.0
+
+        diag = pyfector.run_diagnostics(
+            fitted_with_se,
+            placebo_period=(-3, 0),
+            _requested=["placebo"],
+        )
+
+        assert diag.placebo is not None
+        assert abs(diag.placebo.estimate) < 100_000.0
 
     def test_f_tests_filter_nan_bootstrap_columns(self):
         inf = SimpleNamespace(
@@ -591,6 +614,9 @@ class TestDiagnosticOptionsProvenance:
     """`options` dict on Diagnostics must record what was used."""
 
     def test_options_recorded(self, fitted_with_se):
+        fitted_with_se.inference.att_on_boot = (
+            fitted_with_se.inference.att_on_boot[:, :5]
+        )
         diag = fitted_with_se.diagnose(placebo_period=(-3, 0))
         assert diag.options["tost_threshold"] == diag.tost.threshold
         assert diag.options["placebo_period"] == (-3, 0)
@@ -611,7 +637,7 @@ class TestFitTimeDiagnostics:
     def _kw(self, small_panel, **extra):
         return dict(
             data=small_panel["data"], Y="Y", D="D", index=("unit", "time"),
-            method="ife", r=2, CV=False, se=True, nboots=50, seed=42,
+            method="ife", r=2, CV=False, se=True, nboots=30, seed=42,
             **extra,
         )
 
@@ -713,6 +739,8 @@ class TestFitTimeDiagnostics:
             ({"f_threshold": 0.0}, "f_threshold"),
             ({"alpha": 1.0}, "alpha"),
             ({"placebo_period": (1, -1)}, "start <= end"),
+            ({"placebo_period": (0, 0)}, "pre-treatment"),
+            ({"placebo_period": (-1, 1)}, "post-treatment"),
             ({"loo": "yes"}, "loo"),
         ],
     )
@@ -765,7 +793,7 @@ class TestDiagnosticsContainer:
     def test_no_heavy_references_in_diagnostics(self, small_panel):
         result = pyfector.fect(
             data=small_panel["data"], Y="Y", D="D", index=("unit", "time"),
-            method="ife", r=2, CV=False, se=True, nboots=50, seed=42,
+            method="ife", r=2, CV=False, se=True, nboots=12, seed=42,
             diagnostics="full",
             diagnostics_options={"placebo_period": (-3, 0)},
         )
@@ -800,7 +828,7 @@ class TestDiagnosticsContainer:
         import pickle
         result = pyfector.fect(
             data=small_panel["data"], Y="Y", D="D", index=("unit", "time"),
-            method="ife", r=2, CV=False, se=True, nboots=50, seed=42,
+            method="ife", r=2, CV=False, se=True, nboots=12, seed=42,
             diagnostics="full",
             diagnostics_options={"placebo_period": (-3, 0)},
         )
