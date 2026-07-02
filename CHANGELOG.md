@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 - 2026-07-02
 
 ### Multi-core scaling for the weighted (`W=`) inference and CV paths
 
