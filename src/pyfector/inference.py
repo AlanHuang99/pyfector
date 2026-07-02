@@ -19,10 +19,13 @@ dependence:
 
 Implementation notes
 --------------------
-* Replications are parallelised via joblib.  The default backend is
-  ``processes`` to avoid GIL contention on long-running fits; for
-  repeated small fits ``prefer="threads"`` can be cheaper because
-  numpy releases the GIL inside BLAS.
+* Replications are parallelised via joblib's ``loky`` (process) backend
+  with ``inner_max_num_threads=1``.  Processes avoid the GIL contention
+  that throttles the weighted EM path, whose per-replicate work is
+  dominated by GIL-holding elementwise numpy operations rather than
+  GIL-releasing BLAS calls.  Pinning each worker to a single BLAS thread
+  keeps ``n_jobs`` workers from oversubscribing the cores that a
+  multithreaded BLAS would otherwise claim inside every replicate.
 * Every replicate receives a deterministic seed derived from the
   master ``seed`` so results are reproducible.
 * The dynamic-ATT grid is pinned to the point-estimate's ``time_on``
@@ -37,7 +40,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import numpy as np
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, parallel_config
 
 from .backend import get_backend, to_numpy, to_device, make_rng
 
@@ -147,9 +150,10 @@ def bootstrap(
     if n_jobs == 1:
         results = [_one_boot(s) for s in boot_seeds]
     else:
-        results = Parallel(n_jobs=n_jobs, prefer="threads")(
-            delayed(_one_boot)(s) for s in boot_seeds
-        )
+        with parallel_config(backend="loky", inner_max_num_threads=1):
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(_one_boot)(s) for s in boot_seeds
+            )
 
     # Filter failed boots
     valid = [(avg, on) for avg, on in results if avg is not None]
@@ -238,9 +242,10 @@ def jackknife(
     if n_jobs == 1:
         results = [_one_jack(j) for j in range(N)]
     else:
-        results = Parallel(n_jobs=n_jobs, prefer="threads")(
-            delayed(_one_jack)(j) for j in range(N)
-        )
+        with parallel_config(backend="loky", inner_max_num_threads=1):
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(_one_jack)(j) for j in range(N)
+            )
 
     valid = [(avg, on) for avg, on in results if avg is not None]
     n_valid = len(valid)
@@ -312,9 +317,10 @@ def permutation_test(
     if n_jobs == 1:
         results = [_one_perm(s) for s in perm_seeds]
     else:
-        results = Parallel(n_jobs=n_jobs, prefer="processes")(
-            delayed(_one_perm)(s) for s in perm_seeds
-        )
+        with parallel_config(backend="loky", inner_max_num_threads=1):
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(_one_perm)(s) for s in perm_seeds
+            )
 
     valid = [r for r in results if r is not None]
     if len(valid) == 0:
