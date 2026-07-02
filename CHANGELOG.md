@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Multi-core scaling for the weighted (`W=`) inference and CV paths
+
+Bootstrap, jackknife, cross-validation, and the permutation test now
+parallelize replicates with joblib's `loky` process backend and pin each
+worker to a single BLAS thread (`inner_max_num_threads=1`). The previous
+thread backend was throttled by the GIL on the weighted EM path, whose
+per-replicate work is dominated by GIL-holding elementwise operations
+rather than GIL-releasing BLAS calls, so raising `n_jobs` barely helped
+and could regress from BLAS oversubscription. Weighted bootstrap and CV
+now scale roughly with `n_jobs` (measured ~2.8x for bootstrap and up to
+~8x for CV on a many-core machine). Results are unchanged: every
+replicate still receives a deterministic per-replicate seed, so standard
+errors and selected `r`/`lambda` are identical to before.
+
 ## 0.2.1 - 2026-05-10
 
 ### Corrected placebo diagnostics to match Liu-Wang-Xu/R `fect`

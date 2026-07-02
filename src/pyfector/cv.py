@@ -42,7 +42,7 @@ import warnings
 from typing import Literal, NamedTuple
 
 import numpy as np
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, parallel_config
 
 from .backend import get_backend, to_numpy, to_device, make_rng
 from .estimators import estimate_ife, estimate_mc
@@ -287,7 +287,8 @@ def cv_ife(
         for r_cand in r_candidates:
             scores[r_cand] = _score_candidate(r_cand)
     else:
-        with Parallel(n_jobs=n_jobs, prefer="threads") as parallel:
+        with parallel_config(backend="loky", inner_max_num_threads=1), \
+                Parallel(n_jobs=n_jobs) as parallel:
             for r_cand in r_candidates:
                 scores[r_cand] = _score_candidate(r_cand, parallel)
 
@@ -379,7 +380,8 @@ def cv_mc(
         for lam in lambda_candidates:
             scores[float(lam)] = _score_candidate(float(lam))
     else:
-        with Parallel(n_jobs=n_jobs, prefer="threads") as parallel:
+        with parallel_config(backend="loky", inner_max_num_threads=1), \
+                Parallel(n_jobs=n_jobs) as parallel:
             for lam in lambda_candidates:
                 scores[float(lam)] = _score_candidate(float(lam), parallel)
 
