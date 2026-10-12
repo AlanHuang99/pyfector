@@ -9,7 +9,7 @@ import pytest
 
 import pyfector
 from pyfector.diagnostics import _run_placebo_test
-from pyfector.inference import bootstrap
+from pyfector.inference import bootstrap, jackknife
 
 
 def _panel(early=2):
@@ -55,6 +55,15 @@ def test_best_effort_unavailable_diagnostic_warns():
     with pytest.warns(RuntimeWarning, match="unavailable"):
         diag = pyfector.run_diagnostics(result)
     assert not diag.tests
+
+
+def test_full_diagnostics_warns_when_automatic_tost_bound_is_unavailable():
+    data = _panel().with_columns((2.0 * pl.col("D")).alias("Y"))
+    with pytest.warns(RuntimeWarning, match="tost.*sigma2_fect"):
+        fit = _fit(data, force="none", se=True, diagnostics="full")
+    assert fit.att_avg == pytest.approx(2.0)
+    assert fit.diagnostics.pretrend_f is not None
+    assert fit.diagnostics.tost is None
 
 
 def test_strict_tost_rejects_unusable_standard_errors():
@@ -292,6 +301,19 @@ def test_numerically_invalid_pre_period_draw_is_counted_as_failed():
     assert 0 < result.n_boot_failed < 20
     assert result.n_boot + result.n_boot_failed == 20
     assert np.isfinite(result.att_on_boot).all()
+
+
+def test_jackknife_rejects_incomplete_deletions_with_one_treated_unit():
+    D = np.array([[0, 0, 0, 0], [1, 0, 0, 0]], dtype=float)
+    I = np.ones_like(D)
+    eff = D * 2.0
+    T_on = np.array([[-1, np.nan, np.nan, np.nan], [0, np.nan, np.nan, np.nan]])
+
+    def estimate(idx):
+        return eff[:, idx], D[:, idx], T_on[:, idx], I[:, idx]
+
+    with pytest.raises(RuntimeError, match="jackknife.*failed|failed.*jackknife"):
+        jackknife(estimate, eff, D, I, T_on, np.array([2, 1, 1, 1]))
 
 
 def test_failed_placebo_replicates_warn_and_are_counted(monkeypatch):

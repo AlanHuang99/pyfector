@@ -299,6 +299,11 @@ def jackknife(
 
     valid = [(avg, on) for avg, on in results if avg is not None]
     n_valid = len(valid)
+    if n_valid != N:
+        raise RuntimeError(
+            f"{N - n_valid} of {N} jackknife deletions failed; "
+            "delete-one-unit inference requires every deletion."
+        )
     if n_valid < 2:
         raise RuntimeError("Too few valid jackknife replications")
 

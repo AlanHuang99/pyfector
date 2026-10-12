@@ -473,9 +473,16 @@ def run_diagnostics(
     threshold_source: str | None = None
     sigma2_fect_used: float | None = None
     if needs_tost_threshold:
-        threshold_abs, threshold_source, sigma2_fect_used = _resolve_tost_threshold(
-            result, tost_threshold
-        )
+        _validate_tost_threshold_value(tost_threshold)
+        try:
+            threshold_abs, threshold_source, sigma2_fect_used = _resolve_tost_threshold(
+                result, tost_threshold
+            )
+        except ValueError as exc:
+            if strict or _strict is None:
+                raise
+            for name in requested & {"tost", "placebo"}:
+                unavailable_reasons[name] = str(exc)
 
     # Pre-trend / equivalence F-tests share the bootstrap covariance pass.
     if (
@@ -539,7 +546,7 @@ def run_diagnostics(
             pass
 
     # Per-period TOST.
-    if k > 0 and "tost" in requested and inf.att_on_se is not None:
+    if k > 0 and "tost" in requested and "tost" not in unavailable_reasons and inf.att_on_se is not None:
         se_pre = inf.att_on_se[pre_idx]
 
         tost_pvals = np.full(k, np.nan)
@@ -574,7 +581,7 @@ def run_diagnostics(
 
     # Holdout/refit placebo test. This follows R fect's placeboTest path:
     # selected pre-treatment cells are removed from II before fitting.
-    if "placebo" in requested and placebo_period is not None:
+    if "placebo" in requested and "placebo" not in unavailable_reasons and placebo_period is not None:
         try:
             diag.placebo = _run_placebo_test(
                 result,

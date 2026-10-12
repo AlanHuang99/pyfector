@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Raise when filtering leaves no observed treated units. Explicit diagnostic lists raise when a requested test is unavailable; best-effort diagnostics warn.
+- Reject incomplete delete-one-unit jackknife inference, including a deletion that removes the only treated unit. In best-effort diagnostics, an unavailable automatic TOST bound warns while other tests remain available.
 - Reapply `max(min_T0, 1)` to the remaining untreated observations in placebo refits. Excluded units leave both the fitting sample and placebo ATT; `PlaceboResult.n_dropped_units` records the count.
 - Run parallel placebo bootstrap refits with joblib `loky` and one BLAS thread per worker.
 - Add `fect(cluster="column")` for whole-cluster bootstrap inference in the main fit and placebo refits. Labels must be non-missing and constant within units, with at least two retained clusters.

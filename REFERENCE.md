@@ -159,6 +159,8 @@ Returned by `fect()`.
 
 Populated when `se=True`.
 
+Delete-one-unit jackknife inference requires every deletion to succeed. Failed deletions raise `RuntimeError`.
+
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `att_avg_se` | `float` | SE of overall ATT |
