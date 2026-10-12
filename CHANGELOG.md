@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.3 - 2026-10-12
 
 - Raise when filtering leaves no observed treated units. Explicit diagnostic lists raise when a requested test is unavailable; best-effort diagnostics warn.
 - Reject incomplete delete-one-unit jackknife inference, including a deletion that removes the only treated unit. In best-effort diagnostics, an unavailable automatic TOST bound warns while other tests remain available.
@@ -10,6 +10,27 @@
 - Warn when bootstrap replications fail, record valid and failed counts in `n_boot` and `n_boot_failed`, and raise when fewer than two valid replications remain.
 - Calibrate pre-trend and equivalence F-tests with the largest treated-unit count in the tested pre-periods, rather than the number of bootstrap draws. Equivalence noncentrality is `N * f_threshold`; small p-values support equivalence. Results expose `n_treated` and `ncp`.
 - Render NumPy docstrings, include all API module pages in the documentation build, describe result fields, repair example blocks and function links, scope heading anchors to API members, and document `loo` as post-treatment sensitivity.
+
+### Behavior and result fields
+
+| Case or field | 0.2.2 | 0.2.3 |
+|---|---|---|
+| No observed treated units after filtering | ATT 0 and SE 0 | `ValueError` |
+| Placebo units below the remaining untreated minimum | Included in the placebo ATT | Excluded from the refit and ATT |
+| Failed jackknife deletion | Discarded | `RuntimeError` |
+| Unavailable configured diagnostics | Could be silently absent | Explicit lists raise; best-effort mode warns |
+| `fect(cluster="column")` | Unavailable | Whole-cluster main and placebo bootstrap |
+| `InferenceResult.n_boot`, `.n_boot_failed` | Absent | Valid and failed bootstrap draw counts |
+| `PlaceboResult.n_dropped_units`, `.n_boot_failed` | Absent | Excluded unit and failed draw counts |
+| `EquivFResult.n_treated`, `.ncp` | Absent | Sample size and equivalence noncentrality |
+
+For a two-period pre-trend vector with 60 contributing treated units and 200 bootstrap draws, holding the covariance fixed gives the following change. These values use the simulated covariance in `test_f_test_calibration_uses_pre_period_unit_count_not_bootstrap_count`.
+
+| Quantity | 0.2.2 | 0.2.3 |
+|---|---:|---:|
+| Denominator degrees of freedom | 198 | 58 |
+| Equivalence noncentrality (`f_threshold=0.5`) | 100 | 30 |
+| Equivalence F-test p-value | 5.1410e-17 | 6.5652e-5 |
 
 ## 0.2.2 - 2026-07-02
 

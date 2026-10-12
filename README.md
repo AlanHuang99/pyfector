@@ -1,29 +1,30 @@
 # pyfector
 
-> **Alpha (v0.2.x).** Results have been checked against R `fect` on synthetic data, but edge cases may remain. APIs may change. Please verify critical results independently. Issues and pull requests are welcome at [GitHub](https://github.com/AlanHuang99/pyfector/issues).
+> **Alpha (v0.2.3).** Results have been checked against R `fect` on synthetic data, but edge cases may remain. APIs may change. Please verify critical results independently. Issues and pull requests are welcome at [GitHub](https://github.com/AlanHuang99/pyfector/issues).
 
 Counterfactual estimators for panel data in Python. Port of the R [fect](https://github.com/xuyiqing/fect) package (Liu, Wang & Xu, 2024, *AJPS*), built on numpy, scipy, polars, and joblib, with optional CuPy GPU support.
 
 ## Installation
 
 ```bash
-pip install pyfector
+uv add pyfector
 ```
 
 **From source:**
 ```bash
 git clone https://github.com/AlanHuang99/pyfector.git
 cd pyfector
-pip install -e ".[dev]"
+uv sync --extra dev --group dev
 ```
 
-Optional extras: `pip install pyfector[gpu]` (CuPy), `pip install pyfector[pandas]`.
+Optional extras: `uv add "pyfector[gpu]"` (CuPy), `uv add "pyfector[pandas]"`.
 
-## Unreleased changes
+## What's New in 0.2.3
 
 - Guard empty treated samples and filter ineligible units from placebo refits.
 - Add `cluster="column"` for main and placebo bootstrap inference, with valid and failed draw counts.
 - Calibrate F-test degrees of freedom and equivalence noncentrality using treated-unit counts.
+- Reject incomplete jackknife inference and report unavailable configured diagnostics.
 - Repair API documentation rendering, navigation, and result-field descriptions.
 
 ## What's New in 0.2.2

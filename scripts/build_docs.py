@@ -10,6 +10,7 @@ import argparse
 import re
 
 import pdoc
+import pyfector
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,7 +43,10 @@ def entrypoint_links(html, modulename):
 
 
 def build(output):
-    pdoc.render.configure(docformat="numpy", template_directory=ROOT / "docs" / "templates")
+    pdoc.render.configure(
+        docformat="numpy", template_directory=ROOT / "docs" / "templates",
+        footer_text=f"pyfector {pyfector.__version__}",
+    )
     pdoc.render.env.filters["scope_headings"] = scope_headings
     pdoc.render.env.filters["entrypoint_links"] = entrypoint_links
     pdoc.pdoc(*MODULES, output_directory=output)

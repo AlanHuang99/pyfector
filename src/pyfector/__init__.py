@@ -35,7 +35,7 @@ estimation, and cross-validation.
 
 """
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 from .fect import fect, FectResult
 from .backend import set_device, get_device
