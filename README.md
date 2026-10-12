@@ -19,6 +19,17 @@ pip install -e ".[dev]"
 
 Optional extras: `pip install pyfector[gpu]` (CuPy), `pip install pyfector[pandas]`.
 
+## Unreleased changes
+
+- Guard empty treated samples and filter ineligible units from placebo refits.
+- Add `cluster="column"` for main and placebo bootstrap inference, with valid and failed draw counts.
+- Calibrate F-test degrees of freedom and equivalence noncentrality using treated-unit counts.
+- Repair API documentation rendering, navigation, and result-field descriptions.
+
+## What's New in 0.2.2
+
+- Bootstrap, jackknife, cross-validation, and permutation replications use joblib's `loky` process backend with one BLAS thread per worker.
+
 ## What's New in 0.2.1
 
 - Corrected `diag.placebo` to use the standardized Liu-Wang-Xu/R `fect` holdout/refit placebo test instead of averaging existing pre-period event-study coefficients.
@@ -109,7 +120,7 @@ For unit filtering, the default estimand is the ATT over the matched panel's obs
 ```python
 fect(
     data, Y, D, index,
-    *, X=None, W=None, group=None, method="ife", force="two-way",
+    X=None, W=None, group=None, method="ife", force="two-way",
     r=0, lam=None, nlambda=10, lambda_candidates=None,
     CV=True, k=10, cv_prop=0.1,
     cv_nobs=3, cv_treat=True, cv_donut=0, criterion="mspe",
@@ -119,6 +130,8 @@ fect(
     max_missing=1.0, normalize=False,
     Z=None, Q=None,
     device="cpu", n_jobs=-1, seed=None,
+    diagnostics="none", diagnostics_options=None,
+    *, cluster=None,
 ) -> FectResult
 ```
 
@@ -147,6 +160,7 @@ fect(
 | `cv_rule` | `str` | `"min"` | `"min"` selects the strict minimum validation score; `"onepct"` selects the simpler candidate within 1% of the best score |
 | `se` | `bool` | `False` | Compute standard errors |
 | `vartype` | `str` | `"bootstrap"` | `"bootstrap"` or `"jackknife"` |
+| `cluster` | `str` | `None` | Column of non-missing cluster labels, constant within units; resamples whole clusters for main and placebo bootstrap inference |
 | `nboots` | `int` | `200` | Bootstrap replications |
 | `alpha` | `float` | `0.05` | Significance level for intervals and tests |
 | `tol` | `float` | `1e-7` | EM convergence tolerance |
@@ -206,6 +220,8 @@ Long-format panel with one row per unit per period.
 
 When `se=True`, `result.inference` carries bootstrap or jackknife SEs and CIs for the overall ATT and per-period effects, plus the full bootstrap distribution (`att_avg_boot`, `att_on_boot`).
 
+Bootstrap inference requires at least two replications. Failed replications produce a warning; `n_boot` and `n_boot_failed` record valid and failed draws. Fewer than two valid draws raise an error. With `cluster="office"`, both the main and placebo bootstrap resample whole offices, including all retained units in each sampled office. At least two clusters must remain; `cluster` is supported with `vartype="bootstrap"`.
+
 ### Diagnostics
 
 ```python
@@ -228,16 +244,9 @@ result.diagnostics.tost.threshold
 result.diagnostics.tests  # registry for future diagnostic outputs
 ```
 
-`placebo_period` runs the standardized placebo test from Liu, Wang, and
-Xu (2024) and R `fect(placeboTest=TRUE)`: pyfector removes the selected
-observed pre-treatment cells from the fitting mask, refits with the
-already-selected rank/lambda configuration, and computes the placebo ATT
-from the withheld cells. For example, `placebo_period=(-3, 0)` withholds
-relative periods `-3`, `-2`, and `-1`; period `0` is the treatment-onset
-period and is not treated as pre-treatment. The point-null
-`diag.placebo.p_value` follows R `fect`'s default normal approximation
-using the placebo bootstrap SE; `diag.placebo.equiv_p_value` is the
-corresponding normal TOST p-value.
+`placebo_period` runs the standardized placebo test from Liu, Wang, and Xu (2024) and R `fect(placeboTest=TRUE)`: pyfector removes the selected observed pre-treatment cells from the fitting mask, refits with the already-selected rank/lambda configuration, and computes the placebo ATT from the withheld cells. For example, `placebo_period=(-3, 0)` withholds relative periods `-3`, `-2`, and `-1`; period `0` is the treatment-onset period and is not treated as pre-treatment. The point-null `diag.placebo.p_value` follows R `fect`'s default normal approximation using the placebo bootstrap SE; `diag.placebo.equiv_p_value` is the corresponding normal TOST p-value.
+
+After holdout, treated and reversal units must retain at least `max(min_T0, 1)` untreated observations. Ineligible units leave the placebo refit and ATT; `diag.placebo.n_dropped_units` records their number. The placebo test raises if no eligible treated unit or withheld observation remains. `diag.placebo.n_boot_failed` counts failed placebo bootstrap replications.
 
 The `tost_threshold` argument has three modes:
 
@@ -245,20 +254,19 @@ The `tost_threshold` argument has three modes:
 - Any other positive float: absolute outcome-scale bound (e.g. `tost_threshold=0.1`)
 - `None`: invalid; raises `ValueError`
 
-`sigma2_fect` is computed from the additive fixed-effect baseline using
-the `force` structure requested for the fit. With the default
-`force="two-way"`, its denominator uses residual degrees of freedom for
-the identified unit/time FE design on the observed untreated cells.
+`sigma2_fect` is computed from the additive fixed-effect baseline using the `force` structure requested for the fit. With the default `force="two-way"`, its denominator uses residual degrees of freedom for the identified unit/time FE design on the observed untreated cells.
 
 | Test | Outputs |
 |------|---------|
 | Pre-trend F-test | `diag.pretrend_f.f_stat`, `.p_value`, `.df1`, `.df2` |
 | Equivalence F-test | `diag.equiv_f.p_value`, `.f_threshold` |
 | TOST | `diag.tost.pvals`, `.threshold`, `.threshold_source`, `.max_pval`, `.all_pass` |
-| Placebo | `diag.placebo.estimate`, `.se`, `.p_value`, `.equiv_p_value`, `.n_obs`, `.n_boot` |
+| Placebo | `diag.placebo.estimate`, `.se`, `.p_value`, `.equiv_p_value`, `.n_obs`, `.n_boot`, `.n_dropped_units`, `.n_boot_failed` |
 | Carryover | `diag.carryover.estimate` |
-| Leave-one-out | `diag.loo.atts`, `.max_change` |
+| Post-treatment sensitivity | `diag.loo.atts`, `.max_change` |
 | Resolved options | `diag.options` (records what was actually used) |
+
+`loo` drops each post-treatment period in turn and reports the largest change in ATT. The paper's leave-one-pre-period-out no-pretrend test is not implemented. Explicit diagnostic lists raise when requested tests are unavailable. `diagnostics="full"` skips optional tests without configuration and warns when configured tests cannot run.
 
 ---
 
@@ -306,6 +314,8 @@ uv run pytest tests/test_vs_r.py -v -s  # R validation (requires R + fect)
 
 - **[REFERENCE.md](REFERENCE.md)** -- parameter tables, return types
 - **[API docs](https://alanhuang99.github.io/pyfector/)** -- searchable HTML reference (pdoc)
+
+Build the local HTML reference with `uv run python scripts/build_docs.py`. The same build runs in the documentation workflow and includes diagnostics, inference, panel construction, estimators, and cross-validation.
 
 ---
 

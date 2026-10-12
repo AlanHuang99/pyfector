@@ -49,10 +49,15 @@ from .estimators import estimate_ife, estimate_mc
 
 
 class CVResult(NamedTuple):
+    """Selected hyperparameters and validation scores."""
     best_r: int | None          # selected number of factors (IFE)
+    """Selected IFE rank, or None for MC."""
     best_lambda: float | None   # selected lambda (MC)
+    """Selected MC penalty, or None for IFE."""
     scores: dict                # {candidate: {criterion: score}}
+    """Validation scores by candidate and criterion."""
     all_residuals: dict         # {candidate: residuals array}
+    """Validation residuals for each candidate when retained."""
 
 
 # ---------------------------------------------------------------------------

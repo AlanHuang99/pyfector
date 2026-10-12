@@ -22,11 +22,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+        uses: astral-sh/setup-uv@v6
+
+      - name: Sync test dependencies
+        run: uv sync --locked --extra dev --group dev --python ${{ matrix.python-version }}
 
       - name: Run tests
         run: |
-          python -m pytest tests/test_linalg.py tests/test_smoke.py tests/test_robust.py tests/test_stress.py tests/test_bootstrap_se.py -v -k "not very_large and not slow"
-
+          uv run --no-sync pytest tests/test_linalg.py tests/test_smoke.py tests/test_robust.py tests/test_stress.py tests/test_bootstrap_se.py tests/test_cv_folds_perf.py tests/test_ledger_fixes.py tests/test_docs.py -v -k "not very_large and not slow"

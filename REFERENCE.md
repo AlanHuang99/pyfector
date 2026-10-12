@@ -1,6 +1,6 @@
 # pyfector API Reference
 
-**Version 0.2.1**
+**Version 0.2.2**
 
 ## Overview
 
@@ -24,6 +24,8 @@ Raw missing outcomes are distinct from counterfactual missingness induced by tre
 
 The default estimand is the ATT over observed treated outcome cells in the matched panel, using all available observed untreated outcomes for counterfactual fitting. Sparse controls are retained if they have at least one observed outcome and satisfy `max_missing`; they do not need to satisfy `min_T0` unless `min_T0_strict=True`. Units with no observed outcome are always dropped.
 
+`fect()` raises when no observed treated units remain after filtering.
+
 ---
 
 ## `fect()`
@@ -33,7 +35,7 @@ Main entry point. Returns a `FectResult`.
 ```python
 fect(
     data, Y, D, index,
-    *, X=None, W=None, group=None,
+    X=None, W=None, group=None,
     method="ife", force="two-way",
     r=0, lam=None, nlambda=10, lambda_candidates=None,
     CV=True, k=10, cv_prop=0.1, cv_nobs=3, cv_treat=True, cv_donut=0,
@@ -43,6 +45,8 @@ fect(
     min_T0=1, min_T0_strict=False, max_missing=1.0, normalize=False,
     Z=None, Q=None,
     device="cpu", n_jobs=-1, seed=None,
+    diagnostics="none", diagnostics_options=None,
+    *, cluster=None,
 ) -> FectResult
 ```
 
@@ -73,7 +77,8 @@ fect(
 | `cv_rule` | `str` | `"min"` | `"min"` selects the strict minimum validation score; `"onepct"` selects the simpler candidate within 1% of best score |
 | `se` | `bool` | `False` | Compute standard errors |
 | `vartype` | `str` | `"bootstrap"` | `"bootstrap"` or `"jackknife"` |
-| `nboots` | `int` | `200` | Bootstrap replications |
+| `cluster` | `str` | `None` | Column of non-missing labels, constant within units; whole-cluster bootstrap for the main fit and placebo refits, with at least two retained clusters |
+| `nboots` | `int` | `200` | Bootstrap replications, at least 2 |
 | `alpha` | `float` | `0.05` | Significance level |
 | `tol` | `float` | `1e-7` | EM convergence tolerance |
 | `max_iter` | `int` | `5000` | Max EM iterations |
@@ -85,6 +90,8 @@ fect(
 | `device` | `str` | `"cpu"` | `"cpu"` or `"gpu"` (requires CuPy) |
 | `n_jobs` | `int` | `-1` | Parallel workers; `-1` uses all CPUs |
 | `seed` | `int` | `None` | Random seed |
+| `diagnostics` | `str` or `list[str]` | `"none"` | `"none"`, best-effort `"full"`, or a strict list of test names |
+| `diagnostics_options` | `dict` | `None` | Options passed to the requested diagnostic tests |
 
 ### Methods
 
@@ -163,14 +170,14 @@ Populated when `se=True`.
 | `att_on_pval` | `np.ndarray` | Per-period p-values |
 | `att_avg_boot` | `np.ndarray` | Bootstrap distribution of ATT |
 | `att_on_boot` | `np.ndarray` | Bootstrap distribution of dynamic ATT |
+| `n_boot` | `int` | Valid bootstrap draws; zero for jackknife |
+| `n_boot_failed` | `int` | Failed bootstrap draws; zero for jackknife |
 
 ---
 
 ## `Diagnostics`
 
-Returned by `result.diagnose()`. Also attached to `result.diagnostics`
-when `pyfector.fect(..., diagnostics="full")` (or a list of names) runs
-diagnostics at fit time.
+Returned by `result.diagnose()`. Also attached to `result.diagnostics` when `pyfector.fect(..., diagnostics="full")` (or a list of names) runs diagnostics at fit time.
 
 ```python
 diag = result.diagnose(
@@ -180,24 +187,13 @@ diag = result.diagnose(
 )
 ```
 
-`placebo_period` is a holdout/refit placebo test, matching the
-Liu-Wang-Xu/R-`fect` standard. The selected observed pre-treatment cells
-are removed from the fitting mask, the model is refit with the
-already-selected rank/lambda configuration, and the placebo ATT is
-computed from the withheld cells. It is not an average of the existing
-pre-treatment event-study coefficients. `(-3, 0)` withholds relative
-periods `-3`, `-2`, and `-1`; period `0` is the treatment-onset period.
-The point-null `diag.placebo.p_value` follows R `fect`'s default normal
-approximation using the placebo bootstrap SE; `diag.placebo.equiv_p_value`
-is the corresponding normal TOST p-value.
+`placebo_period` is a holdout/refit placebo test, matching the Liu-Wang-Xu/R-`fect` standard. The selected observed pre-treatment cells are removed from the fitting mask, the model is refit with the already-selected rank/lambda configuration, and the placebo ATT is computed from the withheld cells. It is not an average of the existing pre-treatment event-study coefficients. `(-3, 0)` withholds relative periods `-3`, `-2`, and `-1`; period `0` is the treatment-onset period. The point-null `diag.placebo.p_value` follows R `fect`'s default normal approximation using the placebo bootstrap SE; `diag.placebo.equiv_p_value` is the corresponding normal TOST p-value.
 
-`tost_threshold` is omitted above so the Liu et al. (2024) default
-`0.36 * sqrt(result.sigma2_fect)` is used. Pass an explicit positive
-float (e.g. `tost_threshold=0.1`) for an absolute outcome-scale bound.
-`sigma2_fect` is the residual variance from the additive fixed-effect
-baseline implied by the fit's `force` option. For two-way FE, the
-denominator uses the residual degrees of freedom of the identified
-unit/time FE design on observed untreated cells.
+The placebo refit requires treated and reversal units to retain at least `max(min_T0, 1)` untreated observations after holdout. Ineligible units leave both the refit and placebo ATT; `n_dropped_units` records the count. No eligible treated units or withheld observations raises `ValueError`. Parallel refits use joblib `loky` with one BLAS thread per worker.
+
+With `cluster="office"`, bootstrap inference resamples whole offices in both the main fit and placebo refits. Cluster labels must be non-missing and constant within each unit, and at least two clusters must remain in the respective fitting sample. `cluster` supports `vartype="bootstrap"` only. Main and placebo bootstrap results record valid and failed draws in `n_boot` and `n_boot_failed`; discarded draws produce a warning, and fewer than two valid draws raise `RuntimeError`.
+
+`tost_threshold` is omitted above so the Liu et al. (2024) default `0.36 * sqrt(result.sigma2_fect)` is used. Pass an explicit positive float (e.g. `tost_threshold=0.1`) for an absolute outcome-scale bound. `sigma2_fect` is the residual variance from the additive fixed-effect baseline implied by the fit's `force` option. For two-way FE, the denominator uses the residual degrees of freedom of the identified unit/time FE design on observed untreated cells.
 
 Registry shape (one sub-dataclass per built-in test, slim-safe):
 
@@ -206,19 +202,19 @@ Registry shape (one sub-dataclass per built-in test, slim-safe):
 | `diag.tests` | `dict[str, object]` | registry of populated diagnostics; future tests are added here |
 | `diag.tost` | `TostResult` | `pvals`, `periods`, `threshold`, `threshold_source`, `sigma2_fect`, `max_pval`, `all_pass` |
 | `diag.pretrend_f` | `PretrendFResult` | `f_stat`, `p_value`, `df1`, `df2` |
-| `diag.equiv_f` | `EquivFResult` | `p_value`, `f_threshold` |
-| `diag.placebo` | `PlaceboResult` | `estimate`, `se`, `p_value`, `equiv_p_value`, `period`, `n_obs`, `n_boot` |
+| `diag.equiv_f` | `EquivFResult` | `p_value`, `f_threshold`, `n_treated`, `ncp` |
+| `diag.placebo` | `PlaceboResult` | `estimate`, `se`, `p_value`, `equiv_p_value`, `period`, `n_obs`, `n_boot`, `n_dropped_units`, `n_boot_failed` |
 | `diag.carryover` | `CarryoverResult` | `estimate`, `period` |
 | `diag.loo` | `LooResult` | `atts`, `periods`, `max_change` |
 | `diag.options` | `dict` | resolved tost_threshold, placebo_period, sigma2_fect, pyfector_version |
 
-`DiagnosticResult` remains available as a compatibility alias for
-`Diagnostics`; new code should use `Diagnostics`.
+`loo` is post-treatment sensitivity: it drops each post-treatment period and reports the largest ATT change. The paper's leave-one-pre-period-out no-pretrend test is not implemented. Explicit lists raise when a requested test is unavailable; best-effort diagnostics warn when configured tests cannot run and skip optional tests without configuration.
 
-The slim-safety contract guarantees `result.diagnostics` holds only
-primitives, tuples, dicts of primitives, and bounded `np.ndarray`s — no
-references to `FectResult`, `PanelData`, or bootstrap matrices. Safe to
-pickle and to retain after a downstream slim of `result.panel`.
+For `k` tested pre-periods, both F-tests use `N = max(count_on[time_on < 0])`, scale the bootstrap-covariance Wald statistic by `(N - k) / ((N - 1) * k)`, and use degrees of freedom `(k, N - k)`. The equivalence F-test uses noncentrality `N * f_threshold` and rejects inequivalence for small p-values. The default `f_threshold=0.5` is the coefficient multiplying `N`, corresponding to `kappa**2` in the paper's distribution. Bootstrap draws estimate covariance; they do not set `N` or the equivalence bound. F-tests require more treated units than tested pre-periods.
+
+`DiagnosticResult` remains available as a compatibility alias for `Diagnostics`; new code should use `Diagnostics`.
+
+The slim-safety contract guarantees `result.diagnostics` holds only primitives, tuples, dicts of primitives, and bounded `np.ndarray`s — no references to `FectResult`, `PanelData`, or bootstrap matrices. Safe to pickle and to retain after a downstream slim of `result.panel`.
 
 ---
 
