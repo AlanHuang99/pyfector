@@ -1,57 +1,62 @@
 # Changelog
 
+## 0.2.3 - 2026-10-12
+
+- Raise when filtering leaves no observed treated units. Explicit diagnostic lists raise when a requested test is unavailable; best-effort diagnostics warn.
+- Reject incomplete delete-one-unit jackknife inference, including a deletion that removes the only treated unit. In best-effort diagnostics, an unavailable automatic TOST bound warns while other tests remain available.
+- Reapply `max(min_T0, 1)` to the remaining untreated observations in placebo refits. Excluded units leave both the fitting sample and placebo ATT; `PlaceboResult.n_dropped_units` records the count.
+- Run parallel placebo bootstrap refits with joblib `loky` and one BLAS thread per worker.
+- Add `fect(cluster="column")` for whole-cluster bootstrap inference in the main fit and placebo refits. Labels must be non-missing and constant within units, with at least two retained clusters.
+- Warn when bootstrap replications fail, record valid and failed counts in `n_boot` and `n_boot_failed`, and raise when fewer than two valid replications remain.
+- Calibrate pre-trend and equivalence F-tests with the largest treated-unit count in the tested pre-periods, rather than the number of bootstrap draws. Equivalence noncentrality is `N * f_threshold`; small p-values support equivalence. Results expose `n_treated` and `ncp`.
+- Render NumPy docstrings, include all API module pages in the documentation build, describe result fields, repair example blocks and function links, scope heading anchors to API members, and document `loo` as post-treatment sensitivity.
+
+### Behavior and result fields
+
+| Case or field | 0.2.2 | 0.2.3 |
+|---|---|---|
+| No observed treated units after filtering | ATT 0 and SE 0 | `ValueError` |
+| Placebo units below the remaining untreated minimum | Included in the placebo ATT | Excluded from the refit and ATT |
+| Failed jackknife deletion | Discarded | `RuntimeError` |
+| Unavailable configured diagnostics | Could be silently absent | Explicit lists raise; best-effort mode warns |
+| `fect(cluster="column")` | Unavailable | Whole-cluster main and placebo bootstrap |
+| `InferenceResult.n_boot`, `.n_boot_failed` | Absent | Valid and failed bootstrap draw counts |
+| `PlaceboResult.n_dropped_units`, `.n_boot_failed` | Absent | Excluded unit and failed draw counts |
+| `EquivFResult.n_treated`, `.ncp` | Absent | Sample size and equivalence noncentrality |
+
+For a two-period pre-trend vector with 60 contributing treated units and 200 bootstrap draws, holding the covariance fixed gives the following change. These values use the simulated covariance in `test_f_test_calibration_uses_pre_period_unit_count_not_bootstrap_count`.
+
+| Quantity | 0.2.2 | 0.2.3 |
+|---|---:|---:|
+| Denominator degrees of freedom | 198 | 58 |
+| Equivalence noncentrality (`f_threshold=0.5`) | 100 | 30 |
+| Equivalence F-test p-value | 5.1410e-17 | 6.5652e-5 |
+
 ## 0.2.2 - 2026-07-02
 
 ### Multi-core scaling for the weighted (`W=`) inference and CV paths
 
-Bootstrap, jackknife, cross-validation, and the permutation test now
-parallelize replicates with joblib's `loky` process backend and pin each
-worker to a single BLAS thread (`inner_max_num_threads=1`). The previous
-thread backend was throttled by the GIL on the weighted EM path, whose
-per-replicate work is dominated by GIL-holding elementwise operations
-rather than GIL-releasing BLAS calls, so raising `n_jobs` barely helped
-and could regress from BLAS oversubscription. Weighted bootstrap and CV
-now scale roughly with `n_jobs` (measured ~2.8x for bootstrap and up to
-~8x for CV on a many-core machine). Results are unchanged: every
-replicate still receives a deterministic per-replicate seed, so standard
-errors and selected `r`/`lambda` are identical to before.
+Bootstrap, jackknife, cross-validation, and the permutation test now parallelize replicates with joblib's `loky` process backend and pin each worker to a single BLAS thread (`inner_max_num_threads=1`). The previous thread backend was throttled by the GIL on the weighted EM path, whose per-replicate work is dominated by GIL-holding elementwise operations rather than GIL-releasing BLAS calls, so raising `n_jobs` barely helped and could regress from BLAS oversubscription. Weighted bootstrap and CV now scale roughly with `n_jobs` (measured ~2.8x for bootstrap and up to ~8x for CV on a many-core machine). Results are unchanged: every replicate still receives a deterministic per-replicate seed, so standard errors and selected `r`/`lambda` are identical to before.
 
 ## 0.2.1 - 2026-05-10
 
 ### Corrected placebo diagnostics to match Liu-Wang-Xu/R `fect`
 
-`diag.placebo` now implements the standardized holdout/refit placebo
-test: selected pre-treatment cells are removed from the fitting mask,
-the model is refit with the already-selected rank/lambda configuration,
-and the placebo ATT is computed from the withheld cells. The previous
-window average of existing pre-period event-study ATTs has been removed.
+`diag.placebo` now implements the standardized holdout/refit placebo test: selected pre-treatment cells are removed from the fitting mask, the model is refit with the already-selected rank/lambda configuration, and the placebo ATT is computed from the withheld cells. The previous window average of existing pre-period event-study ATTs has been removed.
 
-`PlaceboResult` now also records `n_obs` and `n_boot`, the number of
-withheld observed cells and valid placebo bootstrap refits.
+`PlaceboResult` now also records `n_obs` and `n_boot`, the number of withheld observed cells and valid placebo bootstrap refits.
 
-The placebo point-null p-value now matches R `fect`'s default normal
-approximation using the placebo bootstrap SE; the placebo equivalence
-p-value uses the matching normal TOST formula from `diagtest.R`.
+The placebo point-null p-value now matches R `fect`'s default normal approximation using the placebo bootstrap SE; the placebo equivalence p-value uses the matching normal TOST formula from `diagtest.R`.
 
 ## 0.2.0 - 2026-05-06
 
-**Breaking change** (diagnostics API). The field-by-field migration table is
-included below.
+**Breaking change** (diagnostics API). The field-by-field migration table is included below.
 
 ### Behavior change: TOST default now matches Liu et al. (2024)
 
-`run_diagnostics(result, tost_threshold=0.36)` previously treated
-`0.36` as an absolute equivalence bound. It now triggers Liu's
-scale-aware default `0.36 * sqrt(result.sigma2_fect)`, where
-`sigma2_fect` is the residual variance of the additive fixed-effect
-baseline implied by the fit's `force` option. With the default
-`force="two-way"`, this is the two-way fixed-effects baseline from the
-AJPS paper; pyfector uses residual degrees of freedom for the identified
-FE design on observed untreated cells.
+`run_diagnostics(result, tost_threshold=0.36)` previously treated `0.36` as an absolute equivalence bound. It now triggers Liu's scale-aware default `0.36 * sqrt(result.sigma2_fect)`, where `sigma2_fect` is the residual variance of the additive fixed-effect baseline implied by the fit's `force` option. With the default `force="two-way"`, this is the two-way fixed-effects baseline from the AJPS paper; pyfector uses residual degrees of freedom for the identified FE design on observed untreated cells.
 
-For sparse log-count outcomes fit by MC, the new default can differ
-from the old one by an order of magnitude. Example (developer-month
-panel, MC fit):
+For sparse log-count outcomes fit by MC, the new default can differ from the old one by an order of magnitude. Example (developer-month panel, MC fit):
 
 | Outcome | Old (abs 0.36) | New (Liu auto) |
 |---|---:|---:|
@@ -60,17 +65,11 @@ panel, MC fit):
 | `log_prs_opened_own` | 0.360 | 0.105 |
 | `log_active_days` | 0.360 | 0.075 |
 
-To preserve the old absolute behavior, pass a literal other than
-`0.36` (e.g. `tost_threshold=0.36000001`). To opt out of TOST
-auto-scaling entirely, pass an explicit positive float for an
-absolute bound.
+To preserve the old absolute behavior, pass a literal other than `0.36` (e.g. `tost_threshold=0.36000001`). To opt out of TOST auto-scaling entirely, pass an explicit positive float for an absolute bound.
 
 ### New: `result.sigma2_fect`
 
-`FectResult` now carries `sigma2_fect`, the residual variance of the
-additive-FE baseline (one extra r=0 IFE pass on the main fit, never
-inside bootstrap iterations). For `method="fe"`, `sigma2_fect` equals
-`sigma2` since the chosen estimator is the additive-FE pass.
+`FectResult` now carries `sigma2_fect`, the residual variance of the additive-FE baseline (one extra r=0 IFE pass on the main fit, never inside bootstrap iterations). For `method="fe"`, `sigma2_fect` equals `sigma2` since the chosen estimator is the additive-FE pass.
 
 ### New: `pyfector.fect(..., diagnostics=...)`
 
@@ -85,25 +84,13 @@ result.diagnostics.tost.threshold      # auto-scaled by sigma2_fect
 result.diagnostics.placebo.equiv_p_value
 ```
 
-`diagnostics` accepts `"none"` (default), `"full"`, or a list of test
-names (`["tost", "pretrend_f"]`). The full path is best-effort:
-unconfigured optional tests are silently skipped. An explicit list is
-strict: missing `placebo_period` for a listed `placebo` raises
-`ValueError` at fit start. `diagnostics="full"` requires `se=True`.
+`diagnostics` accepts `"none"` (default), `"full"`, or a list of test names (`["tost", "pretrend_f"]`). The full path is best-effort: unconfigured optional tests are silently skipped. An explicit list is strict: missing `placebo_period` for a listed `placebo` raises `ValueError` at fit start. `diagnostics="full"` requires `se=True`.
 
 ### New: `result.diagnostics`
 
-When `diagnostics="full"` (or a list) is set on `fect()`, the result
-has `result.diagnostics` populated with `Diagnostics`. The container is
-**slim-safe**: it holds only primitives, tuples, dicts of
-primitives, and bounded numpy arrays. No references to the panel,
-inference matrices, or estimator state. Survives a downstream slim of
-`result.panel` and pickle round-trips.
+When `diagnostics="full"` (or a list) is set on `fect()`, the result has `result.diagnostics` populated with `Diagnostics`. The container is **slim-safe**: it holds only primitives, tuples, dicts of primitives, and bounded numpy arrays. No references to the panel, inference matrices, or estimator state. Survives a downstream slim of `result.panel` and pickle round-trips.
 
-`Diagnostics` stores populated tests in a `diag.tests` registry so new
-diagnostics can be added without changing the envelope schema.
-Convenience properties (`diag.tost`, `diag.pretrend_f`, etc.) are kept
-for built-in tests. `DiagnosticResult` remains as a compatibility alias.
+`Diagnostics` stores populated tests in a `diag.tests` registry so new diagnostics can be added without changing the envelope schema. Convenience properties (`diag.tost`, `diag.pretrend_f`, etc.) are kept for built-in tests. `DiagnosticResult` remains as a compatibility alias.
 
 ### Breaking: diagnostics output is now hierarchical
 
@@ -124,18 +111,14 @@ Each test owns its own sub-dataclass. Field renames:
 - `tost_threshold` non-positive or non-finite raises `ValueError`.
 - `alpha` parameter (default 0.05) controls `TostResult.all_pass` cutoff.
 - `diag.tests` registry records populated diagnostic result objects.
-- `diag.options` dict records the resolved configuration used (for
-  reproducibility from a pickled diagnostics object alone).
+- `diag.options` dict records the resolved configuration used (for reproducibility from a pickled diagnostics object alone).
 - Fit-time diagnostics validate option values before estimation begins.
-- Pre-trend F diagnostics drop bootstrap columns with missing selected
-  pre-period coefficients instead of silently omitting the F-test.
+- Pre-trend F diagnostics drop bootstrap columns with missing selected pre-period coefficients instead of silently omitting the F-test.
 
 ### Deferred to future releases
 
-- Carryover TOST equivalence p-value (requires plumbing `att_off_boot`
-  through the inference layer).
-- `result.slim()` helper to drop heavy state. Slim-safety is contracted
-  on `Diagnostics` so the future helper can leave it untouched.
+- Carryover TOST equivalence p-value (requires plumbing `att_off_boot` through the inference layer).
+- `result.slim()` helper to drop heavy state. Slim-safety is contracted on `Diagnostics` so the future helper can leave it untouched.
 
 ## 0.1.7 - 2026-05-04
 

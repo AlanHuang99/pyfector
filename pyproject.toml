@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyfector"
-version = "0.2.2"
-description = "Fast counterfactual estimators for panel data — Python reimplementation of R fect"
+version = "0.2.3"
+description = "Counterfactual estimators for panel data in Python"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Literal
+import warnings
 
 import numpy as np
 from joblib import Parallel, delayed, parallel_config
@@ -47,22 +48,86 @@ from .backend import get_backend, to_numpy, to_device, make_rng
 
 @dataclass
 class InferenceResult:
-    """Inference results container."""
+    """Inference results and distributions.
+
+    For bootstrap inference, ``n_boot`` and ``n_boot_failed`` count valid
+    and failed replications. These counts are zero for jackknife results.
+    """
     att_avg: float                          # point estimate of overall ATT
+    """Overall ATT point estimate."""
     att_avg_se: float                       # standard error
+    """Standard error of the overall ATT."""
     att_avg_ci: tuple[float, float]         # confidence interval
+    """Confidence interval for the overall ATT."""
     att_avg_pval: float                     # p-value
+    """Two-sided p-value for zero overall ATT."""
 
     att_on: np.ndarray                      # (n_periods,) dynamic ATT
+    """Dynamic ATT point estimates on time_on."""
     att_on_se: np.ndarray                   # (n_periods,) SE
+    """Standard errors of dynamic ATT estimates."""
     att_on_ci_lower: np.ndarray             # (n_periods,)
+    """Lower confidence limits for dynamic ATT."""
     att_on_ci_upper: np.ndarray             # (n_periods,)
+    """Upper confidence limits for dynamic ATT."""
     att_on_pval: np.ndarray                 # (n_periods,)
+    """Two-sided p-values for zero dynamic ATT."""
     time_on: np.ndarray                     # (n_periods,) relative time indices
+    """Relative event-time grid."""
 
     # Bootstrap distributions (for advanced use)
     att_avg_boot: np.ndarray | None = None  # (nboots,)
+    """Overall ATT distribution across valid resampled fits."""
     att_on_boot: np.ndarray | None = None   # (n_periods, nboots)
+    """Dynamic ATT distribution, shaped (n_periods, n_valid_replications)."""
+    n_boot: int = 0
+    """Number of valid bootstrap draws; zero for jackknife."""
+    n_boot_failed: int = 0
+    """Number of failed bootstrap draws; zero for jackknife."""
+
+
+def _make_bootstrap_sampler(unit_type, cluster=None):
+    """Prepare whole-unit or whole-cluster draws once per bootstrap."""
+    unit_type = np.asarray(unit_type)
+    if cluster is not None:
+        cluster = np.asarray(cluster)
+        if cluster.ndim != 1 or len(cluster) != len(unit_type):
+            raise ValueError("cluster must have one label per unit")
+        if any(label is None or label != label for label in cluster):
+            raise ValueError("cluster labels must not be missing")
+        labels, inverse, counts = np.unique(cluster, return_inverse=True, return_counts=True)
+        if len(labels) < 2:
+            raise ValueError("cluster bootstrap requires at least two clusters")
+        order = np.argsort(inverse, kind="stable")
+        groups = np.split(order, np.cumsum(counts)[:-1])
+
+        def sample(rng):
+            selected = rng.integers(len(groups), size=len(groups))
+            return np.concatenate([groups[i] for i in selected])
+    else:
+        groups = [np.flatnonzero(unit_type == kind) for kind in (2, 1, 3)]
+
+        def sample(rng):
+            return np.concatenate([
+                rng.choice(group, size=len(group), replace=True) if len(group) else np.array([], dtype=int)
+                for group in groups
+            ])
+    return sample
+
+
+def _check_bootstrap_replicates(n_valid, n_requested, label="bootstrap"):
+    """Require an estimable SE and report discarded replications."""
+    n_failed = n_requested - n_valid
+    if n_valid == 0:
+        raise RuntimeError(f"All {label} replications failed ({n_requested} requested)")
+    if n_valid < 2:
+        raise RuntimeError(f"Too few valid {label} replications: {n_valid} of {n_requested}")
+    if n_failed:
+        warnings.warn(
+            f"{n_failed} of {n_requested} {label} replications failed; using {n_valid} valid replications.",
+            RuntimeWarning, stacklevel=3,
+        )
+    return n_failed
 
 
 def bootstrap(
@@ -99,16 +164,10 @@ def bootstrap(
         ``estimate_fn`` for resampled replications.
     """
     rng = np.random.default_rng(seed)
+    if isinstance(nboots, (bool, np.bool_)) or not isinstance(nboots, (int, np.integer)) or nboots < 2:
+        raise ValueError("nboots must be an integer of at least 2")
     N = Y.shape[1]
-
-    # Identify treated and control units
-    treated_idx = np.where(unit_type == 2)[0]
-    control_idx = np.where(unit_type == 1)[0]
-    reversal_idx = np.where(unit_type == 3)[0]
-
-    N_tr = len(treated_idx)
-    N_co = len(control_idx)
-    N_rev = len(reversal_idx)
+    sample_units = _make_bootstrap_sampler(unit_type, cluster)
 
     # Point estimate. fect() already has this before entering inference, so
     # callers may pass it to avoid re-estimating the unchanged full sample.
@@ -123,17 +182,7 @@ def bootstrap(
     def _one_boot(boot_seed):
         boot_rng = np.random.default_rng(boot_seed)
 
-        if cluster is not None:
-            # Cluster bootstrap
-            unique_clusters = np.unique(cluster)
-            sampled_clusters = boot_rng.choice(unique_clusters, size=len(unique_clusters), replace=True)
-            unit_idx = np.concatenate([np.where(cluster == c)[0] for c in sampled_clusters])
-        else:
-            # Resample treated and control separately
-            tr_sample = boot_rng.choice(treated_idx, size=N_tr, replace=True) if N_tr > 0 else np.array([], dtype=int)
-            co_sample = boot_rng.choice(control_idx, size=N_co, replace=True) if N_co > 0 else np.array([], dtype=int)
-            rev_sample = boot_rng.choice(reversal_idx, size=N_rev, replace=True) if N_rev > 0 else np.array([], dtype=int)
-            unit_idx = np.concatenate([tr_sample, co_sample, rev_sample]).astype(int)
+        unit_idx = sample_units(boot_rng)
 
         try:
             eff_b, D_b, T_on_b, I_b = _unpack_estimate(
@@ -156,9 +205,8 @@ def bootstrap(
             )
 
     # Filter failed boots
-    valid = [(avg, on) for avg, on in results if avg is not None]
-    if len(valid) == 0:
-        raise RuntimeError("All bootstrap replications failed")
+    valid = [(avg, on) for avg, on in results if avg is not None and np.isfinite(avg)]
+    n_failed = _check_bootstrap_replicates(len(valid), nboots)
 
     att_avg_boot = np.array([v[0] for v in valid])
     att_on_boot = np.column_stack([v[1] for v in valid])  # (n_periods, nboots_valid)
@@ -199,6 +247,8 @@ def bootstrap(
         time_on=time_on,
         att_avg_boot=att_avg_boot,
         att_on_boot=att_on_boot,
+        n_boot=len(valid),
+        n_boot_failed=n_failed,
     )
 
 
@@ -249,6 +299,11 @@ def jackknife(
 
     valid = [(avg, on) for avg, on in results if avg is not None]
     n_valid = len(valid)
+    if n_valid != N:
+        raise RuntimeError(
+            f"{N - n_valid} of {N} jackknife deletions failed; "
+            "delete-one-unit inference requires every deletion."
+        )
     if n_valid < 2:
         raise RuntimeError("Too few valid jackknife replications")
 
@@ -376,10 +431,14 @@ def _compute_att(
 
     treated_mask = (D > 0) & observed_mask
     n_treated = int(np.sum(treated_mask))
-    att_avg = 0.0 if n_treated == 0 else float(np.sum(eff[treated_mask]) / n_treated)
+    if n_treated == 0:
+        raise ValueError("No observed treated cells remain for ATT estimation")
+    att_avg = float(np.sum(eff[treated_mask]) / n_treated)
 
     ever_treated = np.any(D > 0, axis=0)                            # (N,)
     all_mask = observed_mask & np.broadcast_to(ever_treated[np.newaxis, :], T_on.shape)
+    if not np.all(np.isfinite(eff[all_mask])):
+        raise ValueError("Non-finite effects in observed ever-treated cells")
     T_on_flat = T_on[all_mask]
     eff_flat = eff[all_mask]
     valid = ~np.isnan(T_on_flat)

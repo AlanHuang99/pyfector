@@ -463,7 +463,7 @@ class TestSigma2Fect:
         xi = np.array([0.0, 1.0, -2.0, 3.0])
         Y = mu + alpha[None, :] + xi[:, None] + resid
         df = pl.DataFrame([
-            {"unit": j, "time": t, "Y": float(Y[t, j]), "D": 0}
+            {"unit": j, "time": t, "Y": float(Y[t, j]), "D": int(j == 2 and t == T - 1)}
             for j in range(N)
             for t in range(T)
         ])
@@ -472,7 +472,7 @@ class TestSigma2Fect:
             data=df, Y="Y", D="D", index=("unit", "time"),
             method="ife", r=1, CV=False, se=False, force="two-way",
         )
-        expected = float(np.sum(resid ** 2) / (T * N - (T + N - 1)))
+        expected = float(np.sum(resid ** 2) / (T * N - 1 - (T + N - 1)))
         assert result.sigma2_fect == pytest.approx(expected)
 
     def test_two_way_fe_rank_handles_disconnected_observed_cells(self):
@@ -490,10 +490,11 @@ class TestSigma2Fect:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def fitted_with_se(small_panel):
+def fitted_with_se():
     """A small fitted result with bootstrap SEs, sufficient for diagnostics."""
     return pyfector.fect(
-        data=small_panel["data"], Y="Y", D="D", index=("unit", "time"),
+        data=_simulate_panel(N=60, T=20, N_treated=25, r=2, seed=42)["data"],
+        Y="Y", D="D", index=("unit", "time"),
         method="ife", r=2, CV=False, se=True, nboots=50, seed=42,
     )
 
@@ -597,6 +598,7 @@ class TestPlaceboTest:
             att_on=np.array([0.10, -0.05, 1.0]),
             att_avg=1.0,
             sigma2_fect=1.0,
+            count_on=np.array([6, 8, 8]),
         )
 
         diag = pyfector.run_diagnostics(
@@ -606,7 +608,7 @@ class TestPlaceboTest:
         )
         assert diag.pretrend_f is not None
         assert diag.equiv_f is not None
-        assert diag.pretrend_f.df2 == 2
+        assert diag.pretrend_f.df2 == 6
         assert np.isfinite(diag.pretrend_f.p_value)
 
 
@@ -642,6 +644,7 @@ class TestFitTimeDiagnostics:
         )
 
     def test_full_populates_required_tests(self, small_panel):
+        small_panel = _simulate_panel(N=60, T=20, N_treated=25, r=2, seed=42)
         result = pyfector.fect(**self._kw(small_panel, diagnostics="full"))
         assert result.diagnostics is not None
         assert result.diagnostics.tost is not None

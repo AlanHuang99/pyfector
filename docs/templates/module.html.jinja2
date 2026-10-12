@@ -1,0 +1,20 @@
+{% extends "default/module.html.jinja2" %}
+
+{% block nav_submodules %}
+    {% if module.modulename == "pyfector" %}
+        <h2>Submodules</h2>
+        <ul>
+            {% for name in all_modules | sort if name.startswith("pyfector.") %}
+                <li><a href="{{ name | replace('.', '/') }}.html">{{ name.split('.')[-1] }}</a></li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        {{ super() }}
+    {% endif %}
+{% endblock %}
+
+{% macro docstring(var) %}
+    {% if var.docstring %}
+        <div class="docstring">{{ var.docstring | replace("@public", "") | to_markdown | to_html | scope_headings(var.qualname) | linkify(namespace=var.qualname, shorten=False) | replace('href=""', ('href="./' ~ module.modulename.split('.')[-1] ~ '.html"') | safe) | entrypoint_links(module.modulename) | safe }}</div>
+    {% endif %}
+{% endmacro %}

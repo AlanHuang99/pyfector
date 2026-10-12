@@ -20,10 +20,10 @@ from conftest import _simulate_panel
 def _r_available():
     try:
         r = subprocess.run(
-            ["R", "-e", 'library(fect); cat("ok")'],
+            ["R", "--vanilla", "--slave", "-e", 'library(fect); cat("ok")'],
             capture_output=True, text=True, timeout=30,
         )
-        return "ok" in r.stdout
+        return r.returncode == 0 and r.stdout.strip() == "ok"
     except Exception:
         return False
 

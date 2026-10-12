@@ -28,7 +28,7 @@ and the :class:`FectResult` dataclass that packages its output.
 
 Example
 -------
-::
+```python
 
     import pyfector
 
@@ -47,6 +47,7 @@ Example
     )
     result.summary()
     result.plot(kind="gap")
+```
 """
 
 from __future__ import annotations
@@ -74,62 +75,95 @@ class FectResult:
     """Container for all fect estimation results."""
     # Method info
     method: str
+    """Estimator used for the point fit."""
     r_cv: int | None = None
+    """Selected IFE rank, or the fixed rank supplied by the caller."""
     lambda_cv: float | None = None
+    """Selected or supplied MC penalty."""
 
     # Point estimates
     att_avg: float = 0.0
+    """ATT averaged over observed treated outcome cells."""
     att_avg_unit: float = 0.0
+    """Mean of unit-specific ATTs over units with observed treated outcomes."""
 
     # Dynamic effects
     att_on: np.ndarray | None = None
+    """Mean counterfactual gap at each relative event time, including pre-treatment periods."""
     time_on: np.ndarray | None = None
+    """Relative event-time grid; treatment onset is zero."""
     count_on: np.ndarray | None = None
+    """Number of observed ever-treated units contributing at each event time."""
 
     # Exit effects (treatment reversal)
     att_off: np.ndarray | None = None
+    """Post-reversal event-study effects when populated."""
     time_off: np.ndarray | None = None
+    """Post-reversal event-time grid when populated."""
 
     # Coefficients
     beta: np.ndarray | None = None
+    """Estimated covariate coefficients."""
     covariate_names: list[str] = field(default_factory=list)
+    """Column names corresponding to beta."""
 
     # Fixed effects
     mu: float = 0.0
+    """Estimated intercept."""
     alpha: np.ndarray | None = None   # unit FE
+    """Estimated unit fixed effects."""
     xi: np.ndarray | None = None      # time FE
+    """Estimated time fixed effects."""
     factors: np.ndarray | None = None
+    """Estimated latent time factors."""
     loadings: np.ndarray | None = None
+    """Estimated unit loadings on the latent factors."""
 
     # Counterfactual and effects matrices
     Y_ct: np.ndarray | None = None    # T×N counterfactual
+    """Fitted untreated counterfactual outcomes, shaped (T, N)."""
     eff: np.ndarray | None = None     # T×N treatment effects
+    """Outcome minus fitted counterfactual, shaped (T, N)."""
     residuals: np.ndarray | None = None
+    """Masked residuals on the untreated fitting sample."""
 
     # Model fit
     sigma2: float = 0.0
+    """Chosen estimator residual variance."""
     sigma2_fect: float = 0.0   # additive-FE baseline residual variance
+    """Additive fixed-effect baseline residual variance used for the TOST bound."""
     IC: float = 0.0
+    """Estimator information criterion."""
     PC: float = 0.0
+    """Estimator panel criterion."""
     rmse: float = 0.0
+    """Reserved field; defaults to 0.0."""
     niter: int = 0
+    """Number of EM iterations."""
     converged: bool = False
+    """Whether the estimator reached its convergence tolerance."""
 
     # Inference
     inference: InferenceResult | None = None
+    """Bootstrap or jackknife inference results; see pyfector.inference.InferenceResult."""
 
     # Diagnostics (populated when fect(..., diagnostics="full" | list))
     diagnostics: Diagnostics | None = None
+    """Requested diagnostic tests and their resolved options."""
 
     # CV
     cv_result: CVResult | None = None
+    """Cross-validation candidates and scores; see pyfector.cv.CVResult."""
 
     # Panel metadata
     panel: PanelData | None = None
+    """Filtered panel matrices and unit metadata; see pyfector.panel.PanelData."""
     fit_options: dict[str, Any] = field(default_factory=dict)
+    """Fit settings used by diagnostic refits."""
 
     # Reproducibility
     seed: int | None = None
+    """Seed used for cross-validation and bootstrap draws."""
 
     def summary(self) -> str:
         """Print summary table of results."""
@@ -237,6 +271,8 @@ def fect(
     # Diagnostics (optional; run at fit time and attached to result)
     diagnostics: Literal["none", "full"] | list[str] = "none",
     diagnostics_options: dict | None = None,
+    *,
+    cluster: str | None = None,
 ) -> FectResult:
     """Estimate counterfactual treatment effects for panel data.
 
@@ -316,8 +352,12 @@ def fect(
         Compute standard errors via bootstrap/jackknife.
     vartype : {"bootstrap", "jackknife"}
         Inference method when ``se=True``.
+    cluster : str, optional
+        Column of cluster labels, constant within each unit. Bootstrap
+        inference resamples whole clusters in both the main fit and the
+        placebo refit. Requires at least two retained clusters.
     nboots : int
-        Number of bootstrap replications. Ignored for jackknife.
+        Number of bootstrap replications, at least 2. Ignored for jackknife.
     alpha : float
         Significance level for confidence intervals and tests.
     tol : float
@@ -348,6 +388,12 @@ def fect(
         all available CPUs.
     seed : int, optional
         Random seed for full reproducibility.
+
+    Returns
+    -------
+    FectResult
+        Treatment effects, fitted counterfactuals, and requested inference
+        and diagnostics.
     """
     # Set device
     set_device(device)
@@ -366,6 +412,13 @@ def fect(
         raise ValueError("cv_rule must be 'min' or 'onepct'")
     if min_T0 < 0:
         raise ValueError("min_T0 must be non-negative")
+    if cluster is not None and vartype != "bootstrap":
+        raise ValueError("cluster is supported only with vartype='bootstrap'")
+    if se and vartype == "bootstrap" and (
+        isinstance(nboots, (bool, np.bool_))
+        or not isinstance(nboots, (int, np.integer)) or nboots < 2
+    ):
+        raise ValueError("nboots must be an integer of at least 2")
     if not 0.0 <= max_missing <= 1.0:
         raise ValueError("max_missing must be between 0 and 1")
 
@@ -385,7 +438,16 @@ def fect(
         data, Y=Y, D=D, index=index, X=X, W=W,
         group=group, min_T0=min_T0, min_T0_strict=min_T0_strict,
         max_missing=max_missing,
+        cluster=cluster,
     )
+
+    if not np.any((panel.D > 0) & (panel.I > 0)):
+        raise ValueError(
+            "No observed treated units remain after filtering. "
+            "Check treatment, min_T0, and missing-outcome filters."
+        )
+    if se and panel.cluster is not None and len(np.unique(panel.cluster)) < 2:
+        raise ValueError("cluster bootstrap requires at least two clusters after filtering")
 
     # Move to device
     Y_mat = to_device(panel.Y)
@@ -553,6 +615,9 @@ def fect(
             "vartype": vartype,
             "nboots": nboots,
             "n_jobs": n_jobs,
+            "min_T0": min_T0,
+            "min_T0_strict": min_T0_strict,
+            "cluster": cluster,
         },
         seed=seed,
     )
@@ -578,7 +643,8 @@ def fect(
         else:
             opts.setdefault("loo", False)
         result.diagnostics = _run_diagnostics(
-            result, _requested=requested_diag, **opts,
+            result, _requested=requested_diag,
+            _strict=isinstance(diagnostics, list), **opts,
         )
 
     return result
@@ -712,6 +778,7 @@ def _run_inference(
             _estimate_fn, to_numpy(Y_mat), to_numpy(panel.D),
             to_numpy(panel.I), panel.T_on, panel.unit_type,
             nboots=nboots, alpha=alpha, n_jobs=n_jobs, seed=seed,
+            cluster=panel.cluster,
             point_estimate=(result.eff, panel.D, panel.T_on, panel.I),
         )
     else:

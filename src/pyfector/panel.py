@@ -69,30 +69,47 @@ class PanelData:
     """Structured panel data ready for estimation."""
     # Core matrices (all T × N)
     Y: np.ndarray               # outcome
+    """Outcome matrix, shaped (T, N); I identifies observed cells."""
     D: np.ndarray               # treatment indicator (0/1)
+    """Treatment indicator matrix, shaped (T, N)."""
     I: np.ndarray               # observation indicator (1=observed, 0=missing)
+    """Observed-outcome indicator, shaped (T, N)."""
     II: np.ndarray              # control indicator (I with D==1 cells set to 0)
+    """Untreated fitting mask, shaped (T, N)."""
 
     # Covariates (T × N × p), may be None
     X: np.ndarray | None
+    """Covariate tensor, shaped (T, N, p), when supplied."""
 
     # Weights (T × N), may be None
     W: np.ndarray | None
+    """Observation weights, shaped (T, N), when supplied."""
 
     # Treatment timing (T × N)
     T_on: np.ndarray            # relative time to treatment onset
+    """Relative time from the first observed treatment onset; NaN without an identified onset."""
     T_off: np.ndarray | None    # relative time to treatment reversal
+    """Relative time from treatment reversal when populated."""
 
     # Metadata
     unit_ids: np.ndarray        # original unit identifiers
+    """Retained unit identifiers in matrix-column order."""
     time_ids: np.ndarray        # original time identifiers
+    """Period identifiers in matrix-row order."""
     unit_type: np.ndarray       # (N,) 1=control, 2=treated, 3=reversal
+    """Unit classification: 1 control, 2 treated, 3 treatment reversal."""
     covariate_names: list[str]
+    """Names of supplied covariate columns."""
     N: int
+    """Number of retained units."""
     T: int
+    """Number of periods."""
 
     # Status matrix (T × N): 1=treated, 2=control, 3=missing, 4=removed
     obs_status: np.ndarray
+    """Cell status: 1 observed treated, 2 observed untreated, 3 missing outcome."""
+    cluster: np.ndarray | None = None
+    """Cluster labels aligned with unit_ids, when supplied."""
 
 
 def prepare_panel(
@@ -106,6 +123,7 @@ def prepare_panel(
     min_T0: int = 1,
     min_T0_strict: bool = False,
     max_missing: float = 1.0,
+    cluster: str | None = None,
 ) -> PanelData:
     """Convert long-format data to panel matrices.
 
@@ -136,6 +154,13 @@ def prepare_panel(
         Maximum fraction of missing observations per unit (0-1). A value of
         1.0 permits sparse units, but units with zero observed outcomes are
         always removed.
+    cluster : str, optional
+        Cluster column, non-missing and constant within each unit.
+
+    Returns
+    -------
+    PanelData
+        Observed panel matrices and aligned unit metadata.
     """
     unit_col, time_col = index
     X = X or []
@@ -151,6 +176,18 @@ def prepare_panel(
     time_ids = df[time_col].unique().sort().to_numpy()
     N = len(unit_ids)
     TT = len(time_ids)
+
+    cluster_ids = None
+    if cluster is not None:
+        if not isinstance(cluster, str) or cluster not in df.columns:
+            raise ValueError("cluster must name a column in data")
+        labels = df[cluster]
+        if labels.null_count() or (labels.dtype.is_float() and not labels.is_finite().all()):
+            raise ValueError("cluster labels must not be missing or non-finite")
+        assignments = df.select(list(dict.fromkeys([unit_col, cluster]))).unique()
+        if assignments.height != N:
+            raise ValueError("cluster must be constant within each unit")
+        cluster_ids = assignments.sort(unit_col)[cluster].to_numpy()
 
     # Initialize matrices
     Y_mat = np.full((TT, N), np.nan, dtype=np.float64)
@@ -253,6 +290,8 @@ def prepare_panel(
         T_off_mat = T_off_mat[:, kept_idx]
         unit_ids = unit_ids[kept_idx]
         unit_type = unit_type[kept_idx]
+        if cluster_ids is not None:
+            cluster_ids = cluster_ids[kept_idx]
         if X_mat is not None:
             X_mat = X_mat[:, kept_idx, :]
         if W_mat is not None:
@@ -277,6 +316,7 @@ def prepare_panel(
         covariate_names=X,
         N=N, T=TT,
         obs_status=obs_status,
+        cluster=cluster_ids,
     )
 
 

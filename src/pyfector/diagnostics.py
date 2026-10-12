@@ -3,16 +3,16 @@ Diagnostic tests on a fitted :class:`~pyfector.fect.FectResult`.
 
 :func:`run_diagnostics` (also available as ``result.diagnose(...)``)
 runs complementary checks on the pre-treatment portion of the event
-study and on the post-treatment fit. The F-test and TOST defaults
-follow Liu, Wang & Xu (2024):
+study and on the post-treatment fit.
 
 * **Pre-trend F-test.** Wald-type joint significance of the
   pre-treatment ATTs against zero; small p-values cast doubt on the
   parallel-trends assumption.
 * **Equivalence F-test.** Non-central F-test for whether all
   pre-treatment ATTs lie inside a user-supplied equivalence bound
-  (``f_threshold``); large p-values provide positive evidence *for* no
-  pre-trends.
+  (``f_threshold``); small p-values reject inequivalence. Its noncentrality
+  is ``N * f_threshold``, where ``N`` is the largest observed treated-unit
+  count among the tested pre-periods. Bootstrap draws estimate covariance.
 * **TOST** (two one-sided t-tests) on each individual pre-treatment
   coefficient with bound ``tost_threshold``. The default convention
   follows Liu et al. (2024): ``0.36 * sqrt(sigma2_fect)``, where
@@ -29,7 +29,8 @@ follow Liu, Wang & Xu (2024):
   off (reversal units only). Equivalence p deferred until
   ``att_off_boot`` is plumbed through the inference layer.
 * **Leave-one-out (LOO).** Drop each post-treatment period in turn and
-  report the maximum change in overall ATT.
+  report the maximum change in overall ATT. This is post-treatment
+  sensitivity, not the paper's leave-one-pre-period-out no-pretrend test.
 
 Result shape
 ------------
@@ -44,6 +45,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+import warnings
 
 import numpy as np
 
@@ -95,6 +97,8 @@ class EquivFResult:
     """Equivalence F-test (non-central F) for pre-trend bound."""
     p_value: float
     f_threshold: float
+    n_treated: int | None = None
+    ncp: float | None = None
 
     def summary(self) -> str:
         return (
@@ -105,7 +109,12 @@ class EquivFResult:
 
 @dataclass(frozen=True)
 class PlaceboResult:
-    """Holdout/refit placebo ATT with bootstrap and TOST p-values."""
+    """Holdout/refit placebo ATT with bootstrap and TOST p-values.
+
+    ``n_obs`` counts withheld cells from eligible units. ``n_dropped_units``
+    counts units excluded after holdout; ``n_boot`` and ``n_boot_failed``
+    count valid and failed placebo bootstrap replications.
+    """
     estimate: float
     se: float
     p_value: float
@@ -113,6 +122,8 @@ class PlaceboResult:
     period: tuple[int, int]
     n_obs: int
     n_boot: int
+    n_dropped_units: int = 0
+    n_boot_failed: int = 0
 
     def summary(self) -> str:
         return (
@@ -137,7 +148,10 @@ class CarryoverResult:
 
 @dataclass(frozen=True)
 class LooResult:
-    """Leave-one-out post-period sensitivity."""
+    """Post-treatment sensitivity from dropping each post-treatment period.
+
+    This is not a leave-one-pre-period-out no-pretrend test.
+    """
     atts: np.ndarray
     periods: np.ndarray
     max_change: float
@@ -361,6 +375,7 @@ def run_diagnostics(
     alpha: float = 0.05,
     *,
     _requested: list[str] | None = None,
+    _strict: bool | None = None,
 ) -> Diagnostics:
     """Run diagnostic tests on a FectResult.
 
@@ -369,7 +384,12 @@ def run_diagnostics(
     result : FectResult
         Must have inference results (``se=True``).
     f_threshold : float
-        Non-centrality parameter for equivalence F-test.
+        Noncentrality per treated unit for the equivalence F-test:
+        ``ncp = N * f_threshold``. The default coefficient is 0.5; in the
+        paper's notation this is ``kappa**2``. Small p-values support
+        equivalence. ``N`` is the largest ``count_on`` in the tested
+        pre-periods and also determines both F-tests' scale and degrees
+        of freedom.
     tost_threshold : float
         Equivalence bound for TOST. The literal ``0.36`` (default or
         explicit) triggers Liu et al. (2024)'s scale-aware bound,
@@ -383,18 +403,52 @@ def run_diagnostics(
         selected rank/lambda configuration, and the placebo ATT is
         computed from those withheld cells. For example, ``(-3, 0)``
         withholds relative periods ``-3, -2, -1``.
+        Treated and reversal units must retain at least ``max(min_T0, 1)``
+        untreated observations after holdout. Bootstrap draws use the
+        fit's cluster column when supplied.
     carryover_period : (start, end), optional
         Relative time window for carryover test.
     loo : bool
         If True, run leave-one-out post-period sensitivity.
     alpha : float
         Significance cutoff used for ``TostResult.all_pass``.
+
+    Returns
+    -------
+    Diagnostics
+        Available tests and their resolved options. Unavailable configured
+        tests raise for an explicit list and warn in best-effort mode.
     """
     from scipy import stats
 
     diag = Diagnostics()
 
+    requested = set(_requested) if _requested is not None else _VALID_DIAG_NAMES.copy()
+    strict = _requested is not None if _strict is None else _strict
+    expected = requested.copy()
+    unavailable_reasons = {}
+    if _requested is None:
+        if placebo_period is None:
+            expected.discard("placebo")
+        if carryover_period is None:
+            expected.discard("carryover")
+        if not loo:
+            expected.discard("loo")
+
+    def report_unavailable():
+        missing = sorted((expected - set(diag.tests)) | (expected & set(unavailable_reasons)))
+        if missing:
+            descriptions = [
+                f"{name} ({unavailable_reasons[name]})" if name in unavailable_reasons else name
+                for name in missing
+            ]
+            message = f"Requested diagnostics unavailable: {', '.join(descriptions)}"
+            if strict:
+                raise ValueError(message)
+            warnings.warn(message, RuntimeWarning, stacklevel=3)
+
     if result.inference is None:
+        report_unavailable()
         return diag
 
     inf = result.inference
@@ -402,17 +456,15 @@ def run_diagnostics(
     att_on = result.att_on
 
     if time_on is None or att_on is None:
+        report_unavailable()
         return diag
 
     pre_mask = time_on < 0
-    if not np.any(pre_mask):
-        return diag
 
     pre_idx = np.where(pre_mask)[0]
     k = len(pre_idx)
     att_pre = att_on[pre_idx]
 
-    requested = set(_requested) if _requested is not None else _VALID_DIAG_NAMES.copy()
     if placebo_period is not None:
         placebo_period = _validate_placebo_period(placebo_period)
 
@@ -421,13 +473,20 @@ def run_diagnostics(
     threshold_source: str | None = None
     sigma2_fect_used: float | None = None
     if needs_tost_threshold:
-        threshold_abs, threshold_source, sigma2_fect_used = _resolve_tost_threshold(
-            result, tost_threshold
-        )
+        _validate_tost_threshold_value(tost_threshold)
+        try:
+            threshold_abs, threshold_source, sigma2_fect_used = _resolve_tost_threshold(
+                result, tost_threshold
+            )
+        except ValueError as exc:
+            if strict or _strict is None:
+                raise
+            for name in requested & {"tost", "placebo"}:
+                unavailable_reasons[name] = str(exc)
 
     # Pre-trend / equivalence F-tests share the bootstrap covariance pass.
     if (
-        ("pretrend_f" in requested or "equiv_f" in requested)
+        k > 0 and ("pretrend_f" in requested or "equiv_f" in requested)
         and inf.att_on_boot is not None
     ):
         boot_pre_all = inf.att_on_boot[pre_idx, :]
@@ -441,6 +500,21 @@ def run_diagnostics(
         boot_pre = None
 
     if boot_pre is not None:
+        counts = getattr(result, "count_on", None)
+        if counts is None:
+            reason = "observed treated-unit counts (count_on) are required"
+            n_treated = 0
+        else:
+            pre_counts = np.asarray(counts)[pre_idx]
+            valid_counts = np.all(np.isfinite(pre_counts)) and np.all(pre_counts >= 0)
+            n_treated = int(np.max(pre_counts)) if valid_counts else 0
+            reason = "insufficient observed treated units for the number of tested pre-periods"
+        if n_treated <= k:
+            for name in requested & {"pretrend_f", "equiv_f"}:
+                unavailable_reasons[name] = reason
+            boot_pre = None
+
+    if boot_pre is not None:
         S = np.cov(boot_pre)
         if k == 1:
             S = np.asarray(S).reshape(1, 1)
@@ -449,28 +523,30 @@ def run_diagnostics(
             cond = np.linalg.cond(S)
             S_inv = np.linalg.pinv(S) if cond > 1e12 else np.linalg.inv(S)
             F_raw = float(att_pre @ S_inv @ att_pre)
-            scale = (n_boot - k) / ((n_boot - 1) * k)
+            scale = (n_treated - k) / ((n_treated - 1) * k)
             F_stat = F_raw * scale
 
             if np.isfinite(F_stat) and F_stat >= 0:
                 if "pretrend_f" in requested:
                     diag.pretrend_f = PretrendFResult(
                         f_stat=F_stat,
-                        p_value=float(1 - stats.f.cdf(F_stat, k, n_boot - k)),
+                        p_value=float(stats.f.sf(F_stat, k, n_treated - k)),
                         df1=k,
-                        df2=n_boot - k,
+                        df2=n_treated - k,
                     )
                 if "equiv_f" in requested:
-                    ncp = n_boot * f_threshold
+                    ncp = n_treated * f_threshold
                     diag.equiv_f = EquivFResult(
-                        p_value=float(stats.ncf.cdf(F_stat, k, n_boot - k, ncp)),
+                        p_value=float(stats.ncf.cdf(F_stat, k, n_treated - k, ncp)),
                         f_threshold=f_threshold,
+                        n_treated=n_treated,
+                        ncp=ncp,
                     )
         except np.linalg.LinAlgError:
             pass
 
     # Per-period TOST.
-    if "tost" in requested and inf.att_on_se is not None:
+    if k > 0 and "tost" in requested and "tost" not in unavailable_reasons and inf.att_on_se is not None:
         se_pre = inf.att_on_se[pre_idx]
 
         tost_pvals = np.full(k, np.nan)
@@ -489,26 +565,33 @@ def run_diagnostics(
 
         finite = tost_pvals[np.isfinite(tost_pvals)]
         max_p = float(finite.max()) if finite.size else float("nan")
-        all_pass = bool(finite.size and (finite < alpha).all())
-
-        diag.tost = TostResult(
-            pvals=tost_pvals,
-            periods=time_on[pre_idx].copy(),
-            threshold=threshold_abs,
-            threshold_source=threshold_source,
-            sigma2_fect=sigma2_fect_used,
-            max_pval=max_p,
-            all_pass=all_pass,
-        )
+        all_pass = bool(finite.size == k and (finite < alpha).all())
+        if finite.size < k:
+            unavailable_reasons["tost"] = "missing usable standard errors for pre-treatment periods"
+        if finite.size:
+            diag.tost = TostResult(
+                pvals=tost_pvals,
+                periods=time_on[pre_idx].copy(),
+                threshold=threshold_abs,
+                threshold_source=threshold_source,
+                sigma2_fect=sigma2_fect_used,
+                max_pval=max_p,
+                all_pass=all_pass,
+            )
 
     # Holdout/refit placebo test. This follows R fect's placeboTest path:
     # selected pre-treatment cells are removed from II before fitting.
-    if "placebo" in requested and placebo_period is not None:
-        diag.placebo = _run_placebo_test(
-            result,
-            placebo_period=placebo_period,
-            threshold_abs=threshold_abs,
-        )
+    if "placebo" in requested and "placebo" not in unavailable_reasons and placebo_period is not None:
+        try:
+            diag.placebo = _run_placebo_test(
+                result,
+                placebo_period=placebo_period,
+                threshold_abs=threshold_abs,
+            )
+        except (ValueError, RuntimeError) as exc:
+            if strict or _strict is None:
+                raise
+            unavailable_reasons["placebo"] = str(exc)
 
     # Carryover (estimate only; bootstrap p deferred).
     if (
@@ -564,6 +647,7 @@ def run_diagnostics(
     except Exception:
         pass
 
+    report_unavailable()
     return diag
 
 
@@ -622,11 +706,12 @@ def _run_placebo_test(
     threshold_abs: float,
 ) -> PlaceboResult:
     """Run the holdout/refit placebo test used by Liu-Wang-Xu/R fect."""
-    from joblib import Parallel, delayed
+    from joblib import Parallel, delayed, parallel_config
     from scipy import stats
 
     from .backend import to_device, to_numpy
     from .panel import initial_fit
+    from .inference import _make_bootstrap_sampler, _check_bootstrap_replicates
 
     panel = getattr(result, "panel", None)
     if panel is None:
@@ -650,14 +735,28 @@ def _run_placebo_test(
         & (panel.T_on <= p_end)
         & (panel.T_on < 0)
     )
-    n_obs = int(np.sum(holdout_mask))
-    if n_obs == 0:
+    if not np.any(holdout_mask):
         raise ValueError(
             "placebo_period selects no observed pre-treatment cells."
         )
 
     II_holdout = panel.II.copy()
     II_holdout[holdout_mask] = 0.0
+
+    minimum = max(int(opts.get("min_T0", 1)), 1)
+    treated = panel.unit_type != 1
+    remaining = (II_holdout > 0).sum(axis=0)
+    eligible = ~treated | (remaining >= minimum)
+    if opts.get("min_T0_strict", False):
+        eligible &= remaining >= minimum
+    if not np.any(eligible & treated):
+        raise ValueError("No treated units remain eligible for the placebo refit after holdout")
+    n_dropped_units = int(np.count_nonzero(~eligible))
+    eligible_idx = np.flatnonzero(eligible)
+    holdout_mask[:, ~eligible] = False
+    n_obs = int(holdout_mask.sum())
+    if n_obs == 0:
+        raise ValueError("placebo_period selects no eligible observed pre-treatment cells")
 
     normalize = bool(opts.get("normalize", False))
     norm_factor = float(opts.get("norm_factor", 1.0) or 1.0)
@@ -708,7 +807,7 @@ def _run_placebo_test(
             eff_sub = eff_sub * norm_factor
         return float(np.mean(eff_sub[mask_sub]))
 
-    point = _fit_placebo(np.arange(panel.N), tol)
+    point = _fit_placebo(eligible_idx, tol)
     if point is None:
         raise ValueError(
             "placebo_period selects no observed pre-treatment cells."
@@ -721,28 +820,15 @@ def _run_placebo_test(
 
     seed = getattr(result, "seed", None)
     rng = np.random.default_rng(seed)
-    treated_idx = np.where(panel.unit_type == 2)[0]
-    control_idx = np.where(panel.unit_type == 1)[0]
-    reversal_idx = np.where(panel.unit_type == 3)[0]
-    n_tr = len(treated_idx)
-    n_co = len(control_idx)
-    n_rev = len(reversal_idx)
+    cluster = getattr(panel, "cluster", None)
+    sample_units = _make_bootstrap_sampler(
+        panel.unit_type[eligible_idx],
+        cluster[eligible_idx] if cluster is not None else None,
+    )
 
     def _one_boot(boot_seed):
         boot_rng = np.random.default_rng(boot_seed)
-        tr_sample = (
-            boot_rng.choice(treated_idx, size=n_tr, replace=True)
-            if n_tr > 0 else np.array([], dtype=int)
-        )
-        co_sample = (
-            boot_rng.choice(control_idx, size=n_co, replace=True)
-            if n_co > 0 else np.array([], dtype=int)
-        )
-        rev_sample = (
-            boot_rng.choice(reversal_idx, size=n_rev, replace=True)
-            if n_rev > 0 else np.array([], dtype=int)
-        )
-        unit_idx = np.concatenate([tr_sample, co_sample, rev_sample]).astype(int)
+        unit_idx = eligible_idx[sample_units(boot_rng)]
         try:
             return _fit_placebo(unit_idx, boot_tol)
         except Exception:
@@ -752,13 +838,15 @@ def _run_placebo_test(
     if n_jobs == 1:
         boot_results = [_one_boot(s) for s in boot_seeds]
     else:
-        boot_results = Parallel(n_jobs=n_jobs, prefer="threads")(
-            delayed(_one_boot)(s) for s in boot_seeds
-        )
+        with parallel_config(backend="loky", inner_max_num_threads=1):
+            boot_results = Parallel(n_jobs=n_jobs)(
+                delayed(_one_boot)(s) for s in boot_seeds
+            )
     boot = np.array(
         [b for b in boot_results if b is not None and np.isfinite(b)],
         dtype=float,
     )
+    n_failed = _check_bootstrap_replicates(boot.size, nboots, "placebo bootstrap")
 
     se = float("nan")
     p_value = float("nan")
@@ -784,6 +872,8 @@ def _run_placebo_test(
         period=(int(p_start), int(p_end)),
         n_obs=n_obs,
         n_boot=int(boot.size),
+        n_dropped_units=n_dropped_units,
+        n_boot_failed=n_failed,
     )
 
 

@@ -17,13 +17,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install build tools
-        run: pip install build twine
+        uses: astral-sh/setup-uv@v6
 
       - name: Build wheel and sdist
-        run: python -m build
+        run: uv build
 
       - name: Check distributions
-        run: twine check dist/*
+        run: uvx twine check dist/*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -46,24 +46,31 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - uses: astral-sh/setup-uv@v6
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist/
 
-      - name: Install wheel
+      - name: Verify installed wheel
         shell: bash
-        run: pip install dist/*.whl
-
-      - name: Smoke test
-        shell: bash
+        env:
+          PYFECTOR_RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          python -c "
+          for wheel in dist/*.whl; do
+            uv run --isolated --no-project --python "${{ matrix.python-version }}" --with "$wheel" python -I -c '
+          import os
+          from importlib.metadata import version
           import pyfector
-          print(f'pyfector {pyfector.__version__} loaded successfully')
-          print(f'Device: {pyfector.get_device()}')
-          "
+          assert pyfector.__version__ == version("pyfector")
+          expected = os.environ.get("PYFECTOR_RELEASE_TAG", "").removeprefix("v")
+          if expected:
+              assert pyfector.__version__ == expected
+          print(f"pyfector {pyfector.__version__}, device={pyfector.get_device()}")
+          '
+          done
 
   upload-release:
     needs: [build, verify]

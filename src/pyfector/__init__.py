@@ -1,11 +1,14 @@
 """
-pyfector — Fast counterfactual estimators for panel data in Python.
+pyfector: counterfactual estimators for panel data in Python.
 
-A high-performance Python reimplementation of the R ``fect`` package,
-featuring randomized SVD, GPU acceleration (CuPy), parallel computing
-(joblib), Polars data ingestion, and seeded reproducibility.
+A Python implementation of counterfactual estimators for panel data,
+following Liu, Wang and Xu (2024). See the
+[R fect package](https://github.com/xuyiqing/fect) for the R implementation.
 
-Usage::
+Usage
+-----
+
+```python
 
     import pyfector
 
@@ -20,10 +23,19 @@ Usage::
     )
     result.summary()
     result.plot()
+```
+
+API modules
+-----------
+`pyfector.diagnostics` provides pre-trend tests, holdout/refit placebo tests,
+and post-treatment sensitivity diagnostics. `pyfector.inference` provides
+bootstrap, jackknife, and permutation inference. `pyfector.panel`,
+`pyfector.estimators`, and `pyfector.cv` describe panel construction,
+estimation, and cross-validation.
 
 """
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 from .fect import fect, FectResult
 from .backend import set_device, get_device
